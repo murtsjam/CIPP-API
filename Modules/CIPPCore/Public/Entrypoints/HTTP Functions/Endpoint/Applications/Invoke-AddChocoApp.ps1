@@ -15,8 +15,8 @@ Function Invoke-AddChocoApp {
     Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
 
     $ChocoApp = $Request.Body
-    $intuneBody = Get-Content 'AddChocoApp\choco.app.json' | ConvertFrom-Json
-    $AssignTo = $Request.Body.AssignTo
+    $intuneBody = Get-Content 'AddChocoApp\Choco.app.json' | ConvertFrom-Json
+    $AssignTo = $Request.Body.AssignTo -eq 'customGroup' ? $Request.Body.CustomGroup : $Request.Body.AssignTo
     $intuneBody.description = $ChocoApp.description
     $intuneBody.displayName = $ChocoApp.ApplicationName
     $intuneBody.installExperience.runAsAccount = if ($ChocoApp.InstallAsSystem) { 'system' } else { 'user' }

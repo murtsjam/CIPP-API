@@ -13,7 +13,7 @@ function Receive-CippHttpTrigger {
     .FUNCTIONALITY
         Entrypoint
     #>
-    Param(
+    param(
         $Request,
         $TriggerMetadata
     )
@@ -40,24 +40,37 @@ function Receive-CippHttpTrigger {
     $Request = $Request | ConvertTo-Json -Depth 100 | ConvertFrom-Json
     Set-Location (Get-Item $PSScriptRoot).Parent.Parent.FullName
     $FunctionName = 'Invoke-{0}' -f $Request.Params.CIPPEndpoint
-    Write-Information "Function: $($Request.Params.CIPPEndpoint)"
+    Write-Information "API: $($Request.Params.CIPPEndpoint)"
 
     $HttpTrigger = @{
         Request         = [pscustomobject]($Request)
         TriggerMetadata = $TriggerMetadata
     }
 
-    if (Get-Command -Name $FunctionName -ErrorAction SilentlyContinue) {
+    if ((Get-Command -Name $FunctionName -ErrorAction SilentlyContinue) -or $FunctionName -eq 'Invoke-Me') {
         try {
             $Access = Test-CIPPAccess -Request $Request
+            if ($FunctionName -eq 'Invoke-Me') {
+                return
+            }
+        } catch {
+            Write-Information "Access denied for $FunctionName : $($_.Exception.Message)"
+            Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+                    StatusCode = [HttpStatusCode]::Forbidden
+                    Body       = $_.Exception.Message
+                })
+            return
+        }
+
+        try {
             Write-Information "Access: $Access"
             if ($Access) {
                 & $FunctionName @HttpTrigger
             }
         } catch {
-            Write-Information $_.Exception.Message
+            Write-Warning "Exception occurred on HTTP trigger ($FunctionName): $($_.Exception.Message)"
             Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
-                    StatusCode = [HttpStatusCode]::Forbidden
+                    StatusCode = [HttpStatusCode]::InternalServerError
                     Body       = $_.Exception.Message
                 })
         }
@@ -67,6 +80,7 @@ function Receive-CippHttpTrigger {
                 Body       = 'Endpoint not found'
             })
     }
+    return
 }
 
 function Receive-CippOrchestrationTrigger {
@@ -161,10 +175,11 @@ function Receive-CippActivityTrigger {
     .FUNCTIONALITY
         Entrypoint
     #>
-    Param($Item)
+    param($Item)
     Write-Warning "Hey Boo, the activity function is running. Here's some info: $($Item | ConvertTo-Json -Depth 10 -Compress)"
     try {
         $Start = Get-Date
+        $Output = $null
         Set-Location (Get-Item $PSScriptRoot).Parent.Parent.FullName
 
         if ($Item.QueueId) {
@@ -188,7 +203,7 @@ function Receive-CippActivityTrigger {
             $FunctionName = 'Push-{0}' -f $Item.FunctionName
             try {
                 Write-Warning "Activity starting Function: $FunctionName."
-                Invoke-Command -ScriptBlock { & $FunctionName -Item $Item }
+                $Output = Invoke-Command -ScriptBlock { & $FunctionName -Item $Item }
                 Write-Warning "Activity completed Function: $FunctionName."
                 if ($TaskStatus) {
                     $QueueTask.Status = 'Completed'
@@ -230,7 +245,13 @@ function Receive-CippActivityTrigger {
             $null = Set-CippQueueTask @QueueTask
         }
     }
-    return $true
+
+    # Return the captured output if it exists and is not null, otherwise return $true
+    if ($null -ne $Output -and $Output -ne '') {
+        return $Output
+    } else {
+        return $true
+    }
 }
 
 function Receive-CIPPTimerTrigger {
@@ -277,7 +298,7 @@ function Receive-CIPPTimerTrigger {
 
             $Results = Invoke-Command -ScriptBlock { & $Function.Command @Parameters }
             if ($Results -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
-                $FunctionStatus.OrchestratorId = $Results
+                $FunctionStatus.OrchestratorId = $Results -join ','
                 $Status = 'Started'
             } else {
                 $Status = 'Completed'

@@ -1,6 +1,6 @@
 using namespace System.Net
 
-Function Invoke-ListGroupTemplates {
+function Invoke-ListGroupTemplates {
     <#
     .FUNCTIONALITY
         Entrypoint,AnyTenant
@@ -22,8 +22,31 @@ Function Invoke-ListGroupTemplates {
     $Filter = "PartitionKey eq 'GroupTemplate'"
     $Templates = (Get-CIPPAzDataTableEntity @Table -Filter $Filter) | ForEach-Object {
         $data = $_.JSON | ConvertFrom-Json
-        $data | Add-Member -MemberType NoteProperty -Name GUID -Value $_.RowKey -Force
-        $data
+
+        # Normalize groupType to camelCase for consistent frontend handling
+        $normalizedGroupType = switch -Wildcard ($data.groupType.ToLower()) {
+            '*dynamicdistribution*' { 'dynamicDistribution'; break }
+            '*dynamic*' { 'dynamic'; break }
+            '*azurerole*' { 'azureRole'; break }
+            '*unified*' { 'm365'; break }
+            '*microsoft*' { 'm365'; break }
+            '*m365*' { 'm365'; break }
+            '*generic*' { 'generic'; break }
+            '*security*' { 'security'; break }
+            '*distribution*' { 'distribution'; break }
+            '*mail*' { 'distribution'; break }
+            default { $data.groupType }
+        }
+
+        [PSCustomObject]@{
+            displayName     = $data.displayName
+            description     = $data.description
+            groupType       = $normalizedGroupType
+            membershipRules = $data.membershipRules
+            allowExternal   = $data.allowExternal
+            username        = $data.username
+            GUID            = $_.RowKey
+        }
     } | Sort-Object -Property displayName
 
     if ($Request.query.ID) { $Templates = $Templates | Where-Object -Property GUID -EQ $Request.query.id }

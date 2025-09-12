@@ -7,8 +7,8 @@ function Invoke-CIPPStandardStaleEntraDevices {
     .SYNOPSIS
         (Label) Cleanup stale Entra devices
     .DESCRIPTION
-        (Helptext) Cleans up Entra devices that have not connected/signed in for the specified number of days.
-        (DocsDescription) Cleans up Entra devices that have not connected/signed in for the specified number of days. First disables and later deletes the devices. More info can be found in the [Microsoft documentation](https://learn.microsoft.com/en-us/entra/identity/devices/manage-stale-devices)
+        (Helptext) Remediate is currently not available. Cleans up Entra devices that have not connected/signed in for the specified number of days.
+        (DocsDescription) Remediate is currently not available. Cleans up Entra devices that have not connected/signed in for the specified number of days. First disables and later deletes the devices. More info can be found in the [Microsoft documentation](https://learn.microsoft.com/en-us/entra/identity/devices/manage-stale-devices)
     .NOTES
         CAT
             Entra (AAD) Standards
@@ -28,13 +28,28 @@ function Invoke-CIPPStandardStaleEntraDevices {
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/entra-aad-standards#high-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
+    $TestResult = Test-CIPPStandardLicense -StandardName 'StaleEntraDevices' -TenantFilter $Tenant -RequiredCapabilities @('INTUNE_A', 'MDM_Services', 'EMS', 'SCCM', 'MICROSOFTINTUNEPLAN1')
 
     # Get all Entra devices
-    $AllDevices = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/devices' -tenantid $Tenant | Where-Object { $null -ne $_.approximateLastSignInDateTime }
+
+    if ($TestResult -eq $false) {
+        Write-Host "We're exiting as the correct license is not present for this standard."
+        return $true
+    } #we're done.
+
+    try {
+        $AllDevices = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/devices' -tenantid $Tenant | Where-Object { $null -ne $_.approximateLastSignInDateTime }
+    }
+    catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the StaleEntraDevices state for $Tenant. Error: $ErrorMessage" -Sev Error
+        return
+    }
+
     $Date = (Get-Date).AddDays( - [int]$Settings.deviceAgeThreshold)
     $StaleDevices = $AllDevices | Where-Object { $_.approximateLastSignInDateTime -lt $Date }
 
