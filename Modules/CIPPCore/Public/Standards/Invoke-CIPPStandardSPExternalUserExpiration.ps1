@@ -13,7 +13,10 @@ function Invoke-CIPPStandardSPExternalUserExpiration {
         CAT
             SharePoint Standards
         TAG
-            "CIS"
+            "CIS M365 5.0 (7.2.9)"
+            "CISA (MS.SPO.1.5v1)"
+        EXECUTIVETEXT
+            Automatically expires external user access to SharePoint sites and OneDrive after a specified period, reducing security risks from forgotten or unnecessary guest accounts. This ensures external access is regularly reviewed and maintained only when actively needed.
         ADDEDCOMPONENT
             {"type":"number","name":"standards.SPExternalUserExpiration.Days","label":"Days until expiration (Default 60)"}
         IMPACT
@@ -31,18 +34,16 @@ function Invoke-CIPPStandardSPExternalUserExpiration {
     #>
 
     param($Tenant, $Settings)
-    $TestResult = Test-CIPPStandardLicense -StandardName 'SPExternalUserExpiration' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU','ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
+    $TestResult = Test-CIPPStandardLicense -StandardName 'SPExternalUserExpiration' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU', 'ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
 
     try {
         $CurrentState = Get-CIPPSPOTenant -TenantFilter $Tenant |
-        Select-Object -Property _ObjectIdentity_, TenantFilter, ExternalUserExpireInDays, ExternalUserExpirationRequired
-    }
-    catch {
+            Select-Object -Property _ObjectIdentity_, TenantFilter, ExternalUserExpireInDays, ExternalUserExpirationRequired
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the SPExternalUserExpiration state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -87,7 +88,15 @@ function Invoke-CIPPStandardSPExternalUserExpiration {
         } else {
             $FieldValue = $CurrentState
         }
-        Set-CIPPStandardsCompareField -FieldName 'standards.SPExternalUserExpiration' -FieldValue $FieldValue -TenantFilter $Tenant
+        $CurrentValue = @{
+            ExternalUserExpireInDays       = $CurrentState.ExternalUserExpireInDays
+            ExternalUserExpirationRequired = $CurrentState.ExternalUserExpirationRequired
+        }
+        $ExpectedValue = @{
+            ExternalUserExpireInDays       = $Settings.Days
+            ExternalUserExpirationRequired = $true
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.SPExternalUserExpiration' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -TenantFilter $Tenant
         Add-CIPPBPAField -FieldName 'standards.SPExternalUserExpiration' -FieldValue $FieldValue -StoreAs bool -Tenant $Tenant
     }
 }

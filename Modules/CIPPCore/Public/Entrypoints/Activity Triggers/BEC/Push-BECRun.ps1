@@ -143,8 +143,8 @@ function Push-BECRun {
         Write-Information 'Getting bulk requests'
         $GraphResults = New-GraphBulkRequest -Requests $Requests -tenantid $TenantFilter -asapp $true
 
-        $PasswordChanges = ($GraphResults | Where-Object { $_.id -eq 'Users' }).body.value | Where-Object { $_.lastPasswordChangeDateTime -ge $startDate } ?? @()
-        $NewUsers = ($GraphResults | Where-Object { $_.id -eq 'Users' }).body.value | Where-Object { $_.createdDateTime -ge $startDate } ?? @()
+        $PasswordChanges = (($GraphResults | Where-Object { $_.id -eq 'Users' }).body.value | Where-Object { $_.lastPasswordChangeDateTime -ge $startDate }) ?? @()
+        $NewUsers = (($GraphResults | Where-Object { $_.id -eq 'Users' }).body.value | Where-Object { $_.createdDateTime -ge $startDate }) ?? @()
         $MFADevices = ($GraphResults | Where-Object { $_.id -eq 'MFADevices' }).body.value ?? @()
         $NewSPs = ($GraphResults | Where-Object { $_.id -eq 'NewSPs' }).body.value ?? @()
 
@@ -157,9 +157,9 @@ function Push-BECRun {
             NewRules                 = @($RulesLog)
             MailboxPermissionChanges = @($PermissionsLog)
             NewUsers                 = @($NewUsers)
-            MFADevices               = @($MFADevices)
+            MFADevices               = @($MFADevices | Where-Object { $_.'@odata.type' -ne '#microsoft.graph.passwordAuthenticationMethod' })
             ChangedPasswords         = @($PasswordChanges)
-            ExtractedAt              = (Get-Date).ToString('s')
+            ExtractedAt              = (Get-Date)
             ExtractResult            = $ExtractResult
         }
 

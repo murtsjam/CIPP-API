@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ExecNewSafeLinksPolicy {
     <#
     .FUNCTIONALITY
@@ -14,7 +12,7 @@ function Invoke-ExecNewSafeLinksPolicy {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     # Interact with query parameters or the body of the request.
     $TenantFilter = $Request.Query.tenantFilter ?? $Request.Body.tenantFilter
@@ -126,13 +124,13 @@ function Invoke-ExecNewSafeLinksPolicy {
     try {
         # Check if policy already exists
         if (Test-PolicyExists -TenantFilter $TenantFilter -PolicyName $PolicyName) {
-            Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Policy '$PolicyName' already exists" -Sev 'Warning'
+            Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Policy '$PolicyName' already exists" -sev 'Warn'
             return "Policy '$PolicyName' already exists in tenant $TenantFilter"
         }
 
         # Check if rule already exists
         if (Test-RuleExists -TenantFilter $TenantFilter -RuleName $RuleName) {
-            Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Rule '$RuleName' already exists" -Sev 'Warning'
+            Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Rule '$RuleName' already exists" -sev 'Warn'
             return "Rule '$RuleName' already exists in tenant $TenantFilter"
         }
 
@@ -220,8 +218,7 @@ function Invoke-ExecNewSafeLinksPolicy {
         $StatusCode = [HttpStatusCode]::InternalServerError
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @{Results = $Result }
         })

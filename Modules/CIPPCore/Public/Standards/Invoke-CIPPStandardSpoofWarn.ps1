@@ -13,7 +13,9 @@ function Invoke-CIPPStandardSpoofWarn {
         CAT
             Exchange Standards
         TAG
-            "CIS"
+            "CIS M365 5.0 (6.2.3)"
+        EXECUTIVETEXT
+            Displays visual warnings in Outlook when emails come from external senders, helping employees identify potentially suspicious messages and reducing the risk of phishing attacks. This security feature makes it easier for staff to distinguish between internal and external communications.
         ADDEDCOMPONENT
             {"type":"autoComplete","multiple":false,"label":"Select value","name":"standards.SpoofWarn.state","options":[{"label":"Enabled","value":"enabled"},{"label":"Disabled","value":"disabled"}]}
             {"type":"autoComplete","multiple":true,"creatable":true,"required":false,"label":"Enter allowed senders(domain.com, *.domain.com or test@domain.com)","name":"standards.SpoofWarn.AllowListAdd"}
@@ -36,14 +38,12 @@ function Invoke-CIPPStandardSpoofWarn {
     $TestResult = Test-CIPPStandardLicense -StandardName 'SpoofWarn' -TenantFilter $Tenant -RequiredCapabilities @('EXCHANGE_S_STANDARD', 'EXCHANGE_S_ENTERPRISE', 'EXCHANGE_S_STANDARD_GOV', 'EXCHANGE_S_ENTERPRISE_GOV', 'EXCHANGE_LITE') #No Foundation because that does not allow powershell access
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
 
     try {
         $CurrentInfo = (New-ExoRequest -tenantid $Tenant -cmdlet 'Get-ExternalInOutlook')
-    }
-    catch {
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the SpoofWarn state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -51,22 +51,20 @@ function Invoke-CIPPStandardSpoofWarn {
 
     # Get state value using null-coalescing operator
     $state = $Settings.state.value ?? $Settings.state
+
+    $IsEnabled = $state -eq 'enabled'
     $AllowListAdd = $Settings.AllowListAdd.value ?? $Settings.AllowListAdd
 
     # Test if all entries in the AllowListAdd variable are in the AllowList
     $AllowListCorrect = $true
 
     if ($AllowListAdd -eq $null -or $AllowListAdd.Count -eq 0) {
-        Write-Host 'No AllowList entries provided, skipping AllowList check.'
         $AllowListAdd = @{'@odata.type' = '#Exchange.GenericHashTable'; Add = @() }
     } else {
         $AllowListAddEntries = foreach ($entry in $AllowListAdd) {
             if ($CurrentInfo.AllowList -notcontains $entry) {
                 $AllowListCorrect = $false
-                Write-Host "AllowList entry $entry not found in current AllowList"
                 $entry
-            } else {
-                Write-Host "AllowList entry $entry found in current AllowList."
             }
         }
         $AllowListAdd = @{'@odata.type' = '#Exchange.GenericHashTable'; Add = $AllowListAddEntries }
@@ -83,7 +81,6 @@ function Invoke-CIPPStandardSpoofWarn {
     }
 
     if ($Settings.remediate -eq $true) {
-        Write-Host 'Time to remediate!'
         $status = if ($Settings.enable -and $Settings.disable) {
             # Handle pre standards v2.0 legacy settings when this was 2 separate standards
             Write-LogMessage -API 'Standards' -tenant $Tenant -message 'You cannot both enable and disable the Spoof Warnings setting' -sev Error
@@ -129,11 +126,16 @@ function Invoke-CIPPStandardSpoofWarn {
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'SpoofingWarnings' -FieldValue $CurrentInfo.Enabled -StoreAs bool -Tenant $Tenant
 
-        if ($AllowListCorrect -eq $true -and $CurrentInfo.Enabled -eq $status) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = $CurrentInfo | Select-Object Enabled, AllowList
+        $CurrentValue = @{
+            Enabled     = $CurrentInfo.Enabled
+            AllowList   = $CurrentInfo.AllowList
+            IsCompliant = $CurrentInfo.Enabled -eq $IsEnabled -and $AllowListCorrect
         }
-        Set-CIPPStandardsCompareField -FieldName 'standards.SpoofWarn' -FieldValue $FieldValue -Tenant $Tenant
+        $ExpectedValue = @{
+            Enabled     = $IsEnabled
+            AllowList   = $Settings.AllowListAdd.value ? @($Settings.AllowListAdd.value) : @()
+            IsCompliant = $true
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.SpoofWarn' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $Tenant
     }
 }

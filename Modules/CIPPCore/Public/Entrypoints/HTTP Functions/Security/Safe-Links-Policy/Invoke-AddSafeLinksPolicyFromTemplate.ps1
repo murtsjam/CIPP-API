@@ -1,5 +1,3 @@
-using namespace System.Net
-
 Function Invoke-AddSafeLinksPolicyFromTemplate {
     <#
     .FUNCTIONALITY
@@ -14,7 +12,7 @@ Function Invoke-AddSafeLinksPolicyFromTemplate {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     try {
         $RequestBody = $Request.Body
@@ -84,13 +82,13 @@ Function Invoke-AddSafeLinksPolicyFromTemplate {
 
             # Check if policy already exists
             if (Test-PolicyExists -TenantFilter $TenantFilter -PolicyName $PolicyName) {
-                Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Policy '$PolicyName' already exists" -Sev 'Warning'
+                Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Policy '$PolicyName' already exists" -sev 'Warn'
                 return "Policy '$PolicyName' already exists in tenant $TenantFilter"
             }
 
             # Check if rule already exists
             if (Test-RuleExists -TenantFilter $TenantFilter -RuleName $RuleName) {
-                Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Rule '$RuleName' already exists" -Sev 'Warning'
+                Write-LogMessage -headers $Headers -API $APIName -tenant $TenantFilter -message "Rule '$RuleName' already exists" -sev 'Warn'
                 return "Rule '$RuleName' already exists in tenant $TenantFilter"
             }
 
@@ -220,7 +218,7 @@ Function Invoke-AddSafeLinksPolicyFromTemplate {
     }
 
     # Return response
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
         StatusCode = $StatusCode
         Body = @{ Results = $Results }
     })

@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ListIntuneTemplates {
     <#
     .FUNCTIONALITY
@@ -9,11 +7,6 @@ function Invoke-ListIntuneTemplates {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-
     $Table = Get-CippTable -tablename 'templates'
     $Imported = Get-CIPPAzDataTableEntity @Table -Filter "PartitionKey eq 'settings'"
     if ($Imported.IntuneTemplate -ne $true) {
@@ -46,6 +39,9 @@ function Invoke-ListIntuneTemplates {
                 $data | Add-Member -NotePropertyName 'Type' -NotePropertyValue $JSONData.Type -Force
                 $data | Add-Member -NotePropertyName 'GUID' -NotePropertyValue $_.RowKey -Force
                 $data | Add-Member -NotePropertyName 'package' -NotePropertyValue $_.Package -Force
+                $data | Add-Member -NotePropertyName 'isSynced' -NotePropertyValue (![string]::IsNullOrEmpty($_.SHA)) -Force
+                $data | Add-Member -NotePropertyName 'source' -NotePropertyValue $_.Source -Force
+                $data | Add-Member -NotePropertyName 'reusableSettings' -NotePropertyValue $JSONData.ReusableSettings -Force
                 $data
             } catch {
 
@@ -55,14 +51,16 @@ function Invoke-ListIntuneTemplates {
     } else {
         if ($Request.query.mode -eq 'Tag') {
             #when the mode is tag, show all the potential tags, return the object with: label: tag, value: tag, count: number of templates with that tag, unique only
-            $Templates = $RawTemplates | Where-Object { $_.Package } | Select-Object -Property Package | ForEach-Object {
-                $package = $_.Package
+            $Templates = @($RawTemplates | Where-Object { $_.Package } | Group-Object -Property Package | ForEach-Object {
+                $package = $_.Name
+                $packageTemplates = @($_.Group)
+                $templateCount = $packageTemplates.Count
                 [pscustomobject]@{
-                    label         = "$($package) ($(($RawTemplates | Where-Object { $_.Package -eq $package }).Count) Templates)"
+                    label         = "$($package) ($templateCount Templates)"
                     value         = $package
                     type          = 'tag'
-                    templateCount = ($RawTemplates | Where-Object { $_.Package -eq $package }).Count
-                    templates     = ($RawTemplates | Where-Object { $_.Package -eq $package } | ForEach-Object {
+                    templateCount = $templateCount
+                    templates     = @($packageTemplates | ForEach-Object {
                             try {
                                 $JSONData = $_.JSON | ConvertFrom-Json -Depth 100 -ErrorAction SilentlyContinue
                                 $data = $JSONData.RAWJson | ConvertFrom-Json -Depth 100 -ErrorAction SilentlyContinue
@@ -71,13 +69,16 @@ function Invoke-ListIntuneTemplates {
                                 $data | Add-Member -NotePropertyName 'Type' -NotePropertyValue $JSONData.Type -Force
                                 $data | Add-Member -NotePropertyName 'GUID' -NotePropertyValue $_.RowKey -Force
                                 $data | Add-Member -NotePropertyName 'package' -NotePropertyValue $_.Package -Force
+                                $data | Add-Member -NotePropertyName 'source' -NotePropertyValue $_.Source -Force
+                                $data | Add-Member -NotePropertyName 'isSynced' -NotePropertyValue (![string]::IsNullOrEmpty($_.SHA)) -Force
+                                $data | Add-Member -NotePropertyName 'reusableSettings' -NotePropertyValue $JSONData.ReusableSettings -Force
                                 $data
                             } catch {
 
                             }
                         })
                 }
-            } | Sort-Object -Property label -Unique
+            } | Sort-Object -Property label)
         } else {
             $Templates = $RawTemplates.JSON | ForEach-Object { try { ConvertFrom-Json -InputObject $_ -Depth 100 -ErrorAction SilentlyContinue } catch {} }
 
@@ -89,10 +90,9 @@ function Invoke-ListIntuneTemplates {
     # Sort all output regardless of view condition
     $Templates = $Templates | Sort-Object -Property displayName
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
-            Body       = ($Templates | ConvertTo-Json -Depth 100)
+            Body       = ConvertTo-Json -Depth 100 -InputObject @($Templates)
         })
 
 }

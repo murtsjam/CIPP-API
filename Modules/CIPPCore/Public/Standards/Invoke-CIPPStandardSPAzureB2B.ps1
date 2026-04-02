@@ -13,7 +13,9 @@ function Invoke-CIPPStandardSPAzureB2B {
         CAT
             SharePoint Standards
         TAG
-            "CIS"
+            "CIS M365 5.0 (7.2.2)"
+        EXECUTIVETEXT
+            Enables secure collaboration with external partners through SharePoint and OneDrive by integrating with Azure B2B guest access. This allows controlled sharing with external organizations while maintaining security oversight and proper access management.
         ADDEDCOMPONENT
         IMPACT
             Low Impact
@@ -30,18 +32,16 @@ function Invoke-CIPPStandardSPAzureB2B {
     #>
 
     param($Tenant, $Settings)
-    $TestResult = Test-CIPPStandardLicense -StandardName 'SPAzureB2B' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU','ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
+    $TestResult = Test-CIPPStandardLicense -StandardName 'SPAzureB2B' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU', 'ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
 
     try {
         $CurrentState = Get-CIPPSPOTenant -TenantFilter $Tenant |
-        Select-Object -Property _ObjectIdentity_, TenantFilter, EnableAzureADB2BIntegration
-    }
-    catch {
+            Select-Object -Property _ObjectIdentity_, TenantFilter, EnableAzureADB2BIntegration
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the SPAzureB2B state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -79,11 +79,13 @@ function Invoke-CIPPStandardSPAzureB2B {
 
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'AzureB2B' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $tenant
-        if ($StateIsCorrect) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = $CurrentState
+
+        $CurrentValue = @{
+            EnableAzureADB2BIntegration = $CurrentState.EnableAzureADB2BIntegration
         }
-        Set-CIPPStandardsCompareField -FieldName 'standards.SPAzureB2B' -FieldValue $FieldValue -Tenant $Tenant
+        $ExpectedValue = @{
+            EnableAzureADB2BIntegration = $true
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.SPAzureB2B' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $Tenant
     }
 }

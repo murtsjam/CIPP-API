@@ -13,7 +13,14 @@ function Invoke-CIPPStandardOauthConsent {
         CAT
             Entra (AAD) Standards
         TAG
-            "CIS"
+            "CIS M365 5.0 (1.5.1)"
+            "CISA (MS.AAD.4.2v1)"
+            "EIDSCA.AP08"
+            "EIDSCA.AP09"
+            "Essential 8 (1175)"
+            "NIST CSF 2.0 (PR.AA-05)"
+        EXECUTIVETEXT
+            Requires administrative approval before employees can grant applications access to company data, preventing unauthorized data sharing and potential security breaches. This protects against malicious applications while allowing approved business tools to function normally.
         ADDEDCOMPONENT
             {"type":"textField","name":"standards.OauthConsent.AllowedApps","label":"Allowed application IDs, comma separated","required":false}
         IMPACT
@@ -35,13 +42,12 @@ function Invoke-CIPPStandardOauthConsent {
 
     try {
         $State = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -tenantid $tenant
-    }
-    catch {
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the OauthConsent state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
     }
-    $StateIsCorrect = if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -eq 'managePermissionGrantsForSelf.cipp-consent-policy') { $true } else { $false }
+    $StateIsCorrect = if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -eq 'ManagePermissionGrantsForSelf.cipp-consent-policy') { $true } else { $false }
 
     if ($Settings.remediate -eq $true) {
         $AllowedAppIdsForTenant = $settings.AllowedApps -split ',' | ForEach-Object { $_.Trim() }
@@ -63,7 +69,6 @@ function Invoke-CIPPStandardOauthConsent {
 
                 foreach ($AllowedApp in $AllowedAppIdsForTenant) {
                     if ($AllowedApp -and ($AllowedApp -notin $ExistingAppIds)) {
-                        Write-Host "Adding missing approved app: $AllowedApp"
                         New-GraphPostRequest -tenantid $tenant -Uri 'https://graph.microsoft.com/beta/policies/permissionGrantPolicies/cipp-consent-policy/includes' -Type POST -Body ('{"permissionType": "delegated","clientApplicationIds": ["' + $AllowedApp + '"]}') -ContentType 'application/json'
                         New-GraphPostRequest -tenantid $tenant -Uri 'https://graph.microsoft.com/beta/policies/permissionGrantPolicies/cipp-consent-policy/includes' -Type POST -Body ('{ "permissionType": "Application", "clientApplicationIds": ["' + $AllowedApp + '"] }') -ContentType 'application/json'
                     }
@@ -72,8 +77,8 @@ function Invoke-CIPPStandardOauthConsent {
                 "Could not add exclusions, probably already exist: $($_)"
             }
 
-            if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -notin @('managePermissionGrantsForSelf.cipp-consent-policy')) {
-                New-GraphPostRequest -tenantid $tenant -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -Type PATCH -Body '{"permissionGrantPolicyIdsAssignedToDefaultUserRole":["managePermissionGrantsForSelf.cipp-consent-policy"]}' -ContentType 'application/json'
+            if ($State.permissionGrantPolicyIdsAssignedToDefaultUserRole -notin @('ManagePermissionGrantsForSelf.cipp-consent-policy')) {
+                New-GraphPostRequest -tenantid $tenant -Uri 'https://graph.microsoft.com/beta/policies/authorizationPolicy/authorizationPolicy' -Type PATCH -Body '{"permissionGrantPolicyIdsAssignedToDefaultUserRole":["ManagePermissionGrantsForSelf.cipp-consent-policy"]}' -ContentType 'application/json'
             }
 
             Write-LogMessage -API 'Standards' -tenant $tenant -message 'Application Consent Mode has been enabled.' -sev Info
@@ -94,12 +99,12 @@ function Invoke-CIPPStandardOauthConsent {
 
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'OauthConsent' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $tenant
-        if ($StateIsCorrect) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = $State | Select-Object -Property permissionGrantPolicyIdsAssignedToDefaultUserRole
+        $CurrentValue = @{
+            permissionGrantPolicyIdsAssignedToDefaultUserRole = $State.permissionGrantPolicyIdsAssignedToDefaultUserRole
         }
-
-        Set-CIPPStandardsCompareField -FieldName 'standards.OauthConsent' -FieldValue $FieldValue -Tenant $tenant
+        $ExpectedValue = @{
+            permissionGrantPolicyIdsAssignedToDefaultUserRole = @('ManagePermissionGrantsForSelf.cipp-consent-policy')
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.OauthConsent' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $tenant
     }
 }

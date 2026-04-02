@@ -13,6 +13,8 @@ function Invoke-CIPPStandardTeamsExternalAccessPolicy {
         CAT
             Teams Standards
         TAG
+        EXECUTIVETEXT
+            Defines the organization's policy for communicating with external users through Teams, including other organizations, Skype users, and unmanaged accounts. This fundamental setting determines the scope of external collaboration while maintaining security boundaries for business communications.
         ADDEDCOMPONENT
             {"type":"switch","name":"standards.TeamsExternalAccessPolicy.EnableFederationAccess","label":"Allow communication from trusted organizations"}
             {"type":"switch","name":"standards.TeamsExternalAccessPolicy.EnableTeamsConsumerAccess","label":"Allow communication with unmanaged Teams accounts"}
@@ -30,19 +32,16 @@ function Invoke-CIPPStandardTeamsExternalAccessPolicy {
     #>
 
     param($Tenant, $Settings)
-    $TestResult = Test-CIPPStandardLicense -StandardName 'TeamsExternalAccessPolicy' -TenantFilter $Tenant -RequiredCapabilities @('MCOSTANDARD', 'MCOEV', 'MCOIMP', 'TEAMS1','Teams_Room_Standard')
-    ##$Rerun -Type Standard -Tenant $Tenant -Settings $Settings 'TeamsExternalAccessPolicy'
+    $TestResult = Test-CIPPStandardLicense -StandardName 'TeamsExternalAccessPolicy' -TenantFilter $Tenant -RequiredCapabilities @('MCOSTANDARD', 'MCOEV', 'MCOIMP', 'TEAMS1', 'Teams_Room_Standard')
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
 
     try {
         $CurrentState = New-TeamsRequest -TenantFilter $Tenant -Cmdlet 'Get-CsExternalAccessPolicy' -CmdParams @{Identity = 'Global' } |
-        Select-Object *
-    }
-    catch {
+            Select-Object *
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the TeamsExternalAccessPolicy state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -86,12 +85,14 @@ function Invoke-CIPPStandardTeamsExternalAccessPolicy {
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'TeamsExternalAccessPolicy' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $Tenant
 
-        if ($StateIsCorrect -eq $true) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = $CurrentState | Select-Object EnableFederationAccess, EnableTeamsConsumerAccess
+        $CurrentValue = @{
+            EnableFederationAccess    = $CurrentState.EnableFederationAccess
+            EnableTeamsConsumerAccess = $CurrentState.EnableTeamsConsumerAccess
         }
-
-        Set-CIPPStandardsCompareField -FieldName 'standards.TeamsExternalAccessPolicy' -FieldValue $FieldValue -Tenant $Tenant
+        $ExpectedValue = @{
+            EnableFederationAccess    = $EnableFederationAccess
+            EnableTeamsConsumerAccess = $EnableTeamsConsumerAccess
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.TeamsExternalAccessPolicy' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $Tenant
     }
 }

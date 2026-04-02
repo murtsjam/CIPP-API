@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ListUserMailboxDetails {
     <#
     .FUNCTIONALITY
@@ -9,12 +7,6 @@ function Invoke-ListUserMailboxDetails {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-
-
     # Interact with query parameters or the body of the request.
     $TenantFilter = $Request.Query.tenantFilter
     $UserID = $Request.Query.UserID
@@ -163,7 +155,6 @@ function Invoke-ListUserMailboxDetails {
             # First try users array
             $matchedUser = $usernames | Where-Object {
                 $_.id -eq $rawAddress -or
-                $_.displayName -eq $rawAddress -or
                 $_.mailNickname -eq $rawAddress
             }
 
@@ -174,7 +165,8 @@ function Invoke-ListUserMailboxDetails {
                 try {
                     # Escape single quotes in the filter value
                     $escapedAddress = $rawAddress -replace "'", "''"
-                    $filterQuery = "displayName eq '$escapedAddress' or mailNickname eq '$escapedAddress'"
+                    $escapedNickname = $rawAddress -replace "'", "''" -replace ' ', ''
+                    $filterQuery = "displayName eq '$escapedAddress' or mailNickname eq '$escapedNickname'"
                     $contactUri = "https://graph.microsoft.com/beta/contacts?`$filter=$filterQuery&`$select=displayName,mail,mailNickname"
 
                     $matchedContacts = New-GraphGetRequest -tenantid $TenantFilter -uri $contactUri
@@ -288,13 +280,13 @@ function Invoke-ListUserMailboxDetails {
             LitigationHoldEnabled,
             LitigationHoldDate,
             LitigationHoldDuration,
-            @{ Name = 'LicensedForLitigationHold'; Expression = { ($_.PersistedCapabilities -contains 'BPOS_S_DlpAddOn' -or $_.PersistedCapabilities -contains 'BPOS_S_Enterprise') } },
+            @{ Name = 'LicensedForLitigationHold'; Expression = { ($_.PersistedCapabilities -contains 'EXCHANGE_S_ARCHIVE_ADDON' -or $_.PersistedCapabilities -contains 'BPOS_S_ArchiveAddOn' -or $_.PersistedCapabilities -contains 'EXCHANGE_S_ENTERPRISE' -or $_.PersistedCapabilities -contains 'BPOS_S_DlpAddOn' -or $_.PersistedCapabilities -contains 'BPOS_S_Enterprise') } },
             ComplianceTagHoldApplied,
             RetentionHoldEnabled,
             InPlaceHolds)
     } # Select statement taken from ListMailboxes to save a EXO request. If updated here, update in ListMailboxes as well.
 
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = @($GraphRequest)
         })

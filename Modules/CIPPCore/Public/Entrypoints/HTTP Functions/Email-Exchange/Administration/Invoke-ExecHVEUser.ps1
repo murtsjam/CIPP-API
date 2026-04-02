@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ExecHVEUser {
     <#
     .FUNCTIONALITY
@@ -12,7 +10,7 @@ function Invoke-ExecHVEUser {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -Headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     $Results = [System.Collections.Generic.List[string]]::new()
     $HVEUserObject = $Request.Body
@@ -77,7 +75,7 @@ function Invoke-ExecHVEUser {
                     } catch {
                         $ErrorMessage = Get-CippException -Exception $_
                         $Message = "Failed to exclude from CA policy '$($Policy.displayName)': $($ErrorMessage.NormalizedError)"
-                        Write-LogMessage -Headers $Headers -API $APIName -tenant $Tenant -message $Message -Sev 'Warning' -LogData $ErrorMessage
+                        Write-LogMessage -Headers $Headers -API $APIName -tenant $Tenant -message $Message -sev 'Warn' -LogData $ErrorMessage
                         $Results.Add($Message)
                     }
                 }
@@ -87,7 +85,7 @@ function Invoke-ExecHVEUser {
         } catch {
             $ErrorMessage = Get-CippException -Exception $_
             $Message = "Failed to check/update Conditional Access policies: $($ErrorMessage.NormalizedError)"
-            Write-LogMessage -Headers $Headers -API $APIName -tenant $Tenant -message $Message -Sev 'Warning' -LogData $ErrorMessage
+            Write-LogMessage -Headers $Headers -API $APIName -tenant $Tenant -message $Message -sev 'Warn' -LogData $ErrorMessage
             $Results.Add($Message)
         }
 
@@ -100,8 +98,7 @@ function Invoke-ExecHVEUser {
         $StatusCode = [HttpStatusCode]::Forbidden
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @{ Results = @($Results) }
         })

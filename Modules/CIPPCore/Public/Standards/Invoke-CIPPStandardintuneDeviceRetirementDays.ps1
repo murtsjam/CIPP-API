@@ -7,14 +7,16 @@ function Invoke-CIPPStandardintuneDeviceRetirementDays {
     .SYNOPSIS
         (Label) Set inactive device retirement days
     .DESCRIPTION
-        (Helptext) A value between 0 and 270 is supported. A value of 0 disables retirement, retired devices are removed from Intune after the specified number of days.
-        (DocsDescription) A value between 0 and 270 is supported. A value of 0 disables retirement, retired devices are removed from Intune after the specified number of days.
+        (Helptext) A value between 31 and 365 is supported. retired devices are removed from Intune after the specified number of days.
+        (DocsDescription) A value between 31 and 365 is supported. retired devices are removed from Intune after the specified number of days.
     .NOTES
         CAT
             Intune Standards
         TAG
+        EXECUTIVETEXT
+            Automatically removes inactive devices from management after a specified period, helping maintain a clean device inventory and reducing security risks from abandoned or lost devices. This policy ensures that only actively used corporate devices remain in the management system.
         ADDEDCOMPONENT
-            {"type":"number","name":"standards.intuneDeviceRetirementDays.days","label":"Maximum days (0 equals disabled)"}
+            {"type":"number","name":"standards.intuneDeviceRetirementDays.days","label":"Maximum days"}
         IMPACT
             Low Impact
         ADDEDDATE
@@ -31,17 +33,14 @@ function Invoke-CIPPStandardintuneDeviceRetirementDays {
 
     param($Tenant, $Settings)
     $TestResult = Test-CIPPStandardLicense -StandardName 'intuneDeviceRetirementDays' -TenantFilter $Tenant -RequiredCapabilities @('INTUNE_A', 'MDM_Services', 'EMS', 'SCCM', 'MICROSOFTINTUNEPLAN1')
-    ##$Rerun -Type Standard -Tenant $Tenant -Settings $Settings 'intuneDeviceRetirementDays'
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
 
     try {
         $CurrentInfo = (New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/deviceManagement/managedDeviceCleanupRules' -tenantid $Tenant)
-    }
-    catch {
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the intuneDeviceRetirementDays state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -82,8 +81,13 @@ function Invoke-CIPPStandardintuneDeviceRetirementDays {
     }
 
     if ($Settings.report -eq $true) {
-        $state = $StateIsCorrect ? $true : $CurrentInfo.DeviceInactivityBeforeRetirementInDays
-        Set-CIPPStandardsCompareField -FieldName 'standards.intuneDeviceRetirementDays' -FieldValue $state -Tenant $tenant
+        $CurrentValue = @{
+            deviceInactivityBeforeRetirementInDays = $CurrentInfo.DeviceInactivityBeforeRetirementInDays
+        }
+        $ExpectedValue = @{
+            deviceInactivityBeforeRetirementInDays = $Settings.days
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.intuneDeviceRetirementDays' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -TenantFilter $Tenant
         Add-CIPPBPAField -FieldName 'intuneDeviceRetirementDays' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $tenant
     }
 }

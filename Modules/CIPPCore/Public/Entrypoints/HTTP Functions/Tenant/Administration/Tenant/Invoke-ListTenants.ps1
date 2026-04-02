@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ListTenants {
     <#
     .FUNCTIONALITY
@@ -12,17 +10,13 @@ function Invoke-ListTenants {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     # Interact with query parameters or the body of the request.
     $TenantAccess = Test-CIPPAccess -Request $Request -TenantList
     Write-Host "Tenant Access: $TenantAccess"
 
-    if ($TenantAccess -notcontains 'AllTenants') {
-        $AllTenantSelector = $false
-    } else {
-        $AllTenantSelector = $Request.Query.AllTenantSelector
-    }
+    $AllTenantSelector = $Request.Query.AllTenantSelector
 
     $IncludeOffboardingDefaults = $Request.Query.IncludeOffboardingDefaults
 
@@ -39,10 +33,10 @@ function Invoke-ListTenants {
             OrchestratorName = 'UpdateTenants'
             SkipLog          = $true
         }
-        Start-NewOrchestration -FunctionName 'CIPPOrchestrator' -InputObject ($InputObject | ConvertTo-Json -Compress -Depth 5)
+        Start-CIPPOrchestrator -InputObject $InputObject
 
         $GraphRequest = [pscustomobject]@{'Results' = 'Cache has been cleared and a tenant refresh is queued.' }
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
                 StatusCode = [HttpStatusCode]::OK
                 Body       = @{
                     Results  = @($GraphRequest)
@@ -67,12 +61,21 @@ function Invoke-ListTenants {
                 OrchestratorName = 'UpdateTenants'
                 SkipLog          = $true
             }
-            Start-NewOrchestration -FunctionName 'CIPPOrchestrator' -InputObject ($InputObject | ConvertTo-Json -Compress -Depth 5)
+            Start-CIPPOrchestrator -InputObject $InputObject
         }
     }
     try {
         $TenantFilter = $Request.Query.tenantFilter
-        $Tenants = Get-Tenants -IncludeErrors -SkipDomains
+        $tenantParams = @{
+            IncludeErrors = $true
+            SkipDomains   = $true
+        }
+        if ($TenantFilter -and $TenantFilter -ne 'AllTenants') {
+            $tenantParams['TenantFilter'] = $TenantFilter
+        }
+
+        $Tenants = Get-Tenants @tenantParams
+
         if ($TenantAccess -notcontains 'AllTenants') {
             $Tenants = $Tenants | Where-Object -Property customerId -In $TenantAccess
         }
@@ -86,12 +89,15 @@ function Invoke-ListTenants {
 
             # Add offboarding defaults to each tenant
             foreach ($Tenant in $Tenants) {
-                $TenantDefaults = $AllOffboardingDefaults | Where-Object { $_.PartitionKey -eq $Tenant.customerId }
+                $TenantDefaults = $AllOffboardingDefaults | Where-Object { $_.PartitionKey -eq $Tenant.customerId } | Select-Object -First 1
+                if (-not $TenantDefaults) {
+                    $TenantDefaults = $AllOffboardingDefaults | Where-Object { $_.PartitionKey -eq $Tenant.initialDomainName } | Select-Object -First 1
+                }
                 if ($TenantDefaults) {
                     try {
                         $Tenant | Add-Member -MemberType NoteProperty -Name 'offboardingDefaults' -Value ($TenantDefaults.Value | ConvertFrom-Json) -Force
                     } catch {
-                        Write-LogMessage -headers $Headers -API $APIName -message "Failed to parse offboarding defaults for tenant $($Tenant.customerId): $($_.Exception.Message)" -Sev 'Warning'
+                        Write-LogMessage -headers $Headers -API $APIName -message "Failed to parse offboarding defaults for tenant $($Tenant.defaultDomainName): $($_.Exception.Message)" -sev 'Warn'
                         $Tenant | Add-Member -MemberType NoteProperty -Name 'offboardingDefaults' -Value $null -Force
                     }
                 } else {
@@ -100,7 +106,7 @@ function Invoke-ListTenants {
             }
         }
 
-        if ($null -eq $TenantFilter -or $TenantFilter -eq 'null') {
+        if (($null -eq $TenantFilter -or $TenantFilter -eq 'null') -or $Request.Query.Mode -eq 'TenantList') {
             $TenantList = [system.collections.generic.list[object]]::new()
             if ($AllTenantSelector -eq $true) {
                 $AllTenantsObject = @{
@@ -143,7 +149,7 @@ function Invoke-ListTenants {
             }
 
         } else {
-            $body = $Tenants | Where-Object -Property defaultDomainName -EQ $TenantFilter
+            $body = $Tenants
         }
 
         Write-LogMessage -headers $Headers -tenant $TenantFilter -API $APIName -message 'Listed Tenant Details' -Sev 'Debug'
@@ -158,7 +164,7 @@ function Invoke-ListTenants {
         }
     }
 
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = @($Body)
         })

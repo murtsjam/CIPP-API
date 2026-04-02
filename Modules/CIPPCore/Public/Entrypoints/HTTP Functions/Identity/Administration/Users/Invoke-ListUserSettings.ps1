@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ListUserSettings {
     <#
     .FUNCTIONALITY
@@ -8,10 +6,8 @@ function Invoke-ListUserSettings {
         Identity.User.Read
     #>
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     $Username = ([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Headers.'x-ms-client-principal')) | ConvertFrom-Json).userDetails
 
@@ -24,6 +20,9 @@ function Invoke-ListUserSettings {
             $UserSettings = $UserSettings.JSON | ConvertFrom-Json -Depth 10 -ErrorAction SilentlyContinue
         } catch {
             Write-Warning "Failed to convert UserSettings JSON: $($_.Exception.Message)"
+        }
+
+        if (!$UserSettings) {
             $UserSettings = [pscustomobject]@{
                 direction      = 'ltr'
                 paletteMode    = 'light'
@@ -40,9 +39,19 @@ function Invoke-ListUserSettings {
         try {
             $UserSpecificSettings = Get-CIPPAzDataTableEntity @Table -Filter "PartitionKey eq 'UserSettings' and RowKey eq '$Username'"
             $UserSpecificSettings = $UserSpecificSettings.JSON | ConvertFrom-Json -Depth 10 -ErrorAction SilentlyContinue
-        }
-        catch {
+        } catch {
             Write-Warning "Failed to convert UserSpecificSettings JSON: $($_.Exception.Message)"
+        }
+
+        # Get user bookmarks
+        try {
+            $UserBookmarks = Get-CIPPAzDataTableEntity @Table -Filter "PartitionKey eq 'UserBookmarks' and RowKey eq '$Username'"
+            $UserBookmarks = $UserBookmarks.JSON | ConvertFrom-Json -Depth 10 -ErrorAction SilentlyContinue
+            if ($UserBookmarks -and $UserBookmarks -isnot [System.Array]) {
+                $UserBookmarks = @($UserBookmarks)
+            }
+        } catch {
+            Write-Warning "Failed to convert UserBookmarks JSON: $($_.Exception.Message)"
         }
 
         #Get branding settings
@@ -58,14 +67,17 @@ function Invoke-ListUserSettings {
             $UserSettings | Add-Member -MemberType NoteProperty -Name 'UserSpecificSettings' -Value $UserSpecificSettings -Force | Out-Null
         }
 
+        if ($UserBookmarks) {
+            $UserSettings | Add-Member -MemberType NoteProperty -Name 'UserBookmarks' -Value $UserBookmarks -Force | Out-Null
+        }
+
         $StatusCode = [HttpStatusCode]::OK
         $Results = $UserSettings
     } catch {
         $Results = "Function Error: $($_.Exception.Message)"
         $StatusCode = [HttpStatusCode]::BadRequest
     }
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = $Results
         })

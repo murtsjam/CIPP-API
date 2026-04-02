@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ExecAlertsList {
     <#
     .FUNCTIONALITY
@@ -9,12 +7,6 @@ function Invoke-ExecAlertsList {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-
-
     function New-FlatArray ([Array]$arr) {
         $arr | ForEach-Object {
             if ($_ -is 'Array') {
@@ -70,9 +62,6 @@ function Invoke-ExecAlertsList {
                     QueueMessage = 'Still loading data for all tenants. Please check back in a few more minutes'
                     QueueId      = $RunningQueue.RowKey
                 }
-                [PSCustomObject]@{
-                    Waiting = $true
-                }
             } elseif (!$Rows -and !$RunningQueue) {
                 # If no rows are found and no queue is running, we will start a new one
                 $TenantList = Get-Tenants -IncludeErrors
@@ -92,12 +81,8 @@ function Invoke-ExecAlertsList {
                         DurableName  = 'ExecAlertsListAllTenants'
                     }
                     SkipLog          = $true
-                } | ConvertTo-Json -Depth 10
-                $InstanceId = Start-NewOrchestration -FunctionName CIPPOrchestrator -InputObject $InputObject
-                [PSCustomObject]@{
-                    Waiting    = $true
-                    InstanceId = $InstanceId
                 }
+                Start-CIPPOrchestrator -InputObject $InputObject
             } else {
                 $Metadata = [PSCustomObject]@{
                     QueueId = $RunningQueue.RowKey ?? $null
@@ -143,7 +128,7 @@ function Invoke-ExecAlertsList {
             Metadata = $Metadata
         }
     }
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = $Body
         })

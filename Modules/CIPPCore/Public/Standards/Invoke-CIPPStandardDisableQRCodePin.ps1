@@ -13,6 +13,8 @@ function Invoke-CIPPStandardDisableQRCodePin {
         CAT
             Entra (AAD) Standards
         TAG
+        EXECUTIVETEXT
+            Disables QR Code Pin authentication method due to security concerns, forcing users to adopt more secure authentication alternatives. This helps standardize authentication methods and reduces potential security vulnerabilities while ensuring employees use more robust multi-factor authentication options.
         ADDEDCOMPONENT
         IMPACT
             High Impact
@@ -61,7 +63,15 @@ function Invoke-CIPPStandardDisableQRCodePin {
 
     if ($Settings.report -eq $true) {
         $state = $StateIsCorrect -eq $true ? $true :  $CurrentState
-        Set-CIPPStandardsCompareField -FieldName 'standards.DisableQRCodePin' -FieldValue $state -TenantFilter $Tenant
+
+        $CurrentValue = [PSCustomObject]@{
+            DisableQRCodePin = $state
+        }
+        $ExpectedValue = [PSCustomObject]@{
+            DisableQRCodePin = $true
+        }
+
+        Set-CIPPStandardsCompareField -FieldName 'standards.DisableQRCodePin' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -TenantFilter $Tenant
         Add-CIPPBPAField -FieldName 'DisableQRCodePin' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $tenant
     }
 }

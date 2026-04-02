@@ -1,9 +1,7 @@
-using namespace System.Net
-
 function Invoke-RemoveStandardTemplate {
     <#
     .FUNCTIONALITY
-        Entrypoint,AnyTenant
+        Entrypoint
     .ROLE
         Tenant.Standards.ReadWrite
     #>
@@ -12,15 +10,19 @@ function Invoke-RemoveStandardTemplate {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -Headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     # Interact with query parameters or the body of the request.
     $ID = $Request.Body.ID ?? $Request.Query.ID
     try {
         $Table = Get-CippTable -tablename 'templates'
-        $Filter = "PartitionKey eq 'StandardsTemplateV2' and RowKey eq '$ID'"
-        $ClearRow = Get-CIPPAzDataTableEntity @Table -Filter $Filter -Property PartitionKey, RowKey, JSON
-        $TemplateName = (ConvertFrom-Json -InputObject $ClearRow.JSON).templateName
+        $Filter = "PartitionKey eq 'StandardsTemplateV2' and (GUID eq '$ID' or RowKey eq '$ID' or OriginalEntityId eq '$ID')"
+        $ClearRow = Get-CIPPAzDataTableEntity @Table -Filter $Filter -Property PartitionKey, RowKey, ETag, JSON
+        if ($ClearRow.JSON) {
+            $TemplateName = (ConvertFrom-Json -InputObject $ClearRow.JSON -ErrorAction SilentlyContinue).templateName
+        } else {
+            $TemplateName = ''
+        }
         Remove-AzDataTableEntity -Force @Table -Entity $ClearRow
         $Result = "Removed Standards Template named: '$($TemplateName)' with id: $($ID)"
         Write-LogMessage -Headers $Headers -API $APIName -message $Result -Sev Info
@@ -32,8 +34,7 @@ function Invoke-RemoveStandardTemplate {
         $StatusCode = [HttpStatusCode]::InternalServerError
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @{'Results' = $Result }
         })

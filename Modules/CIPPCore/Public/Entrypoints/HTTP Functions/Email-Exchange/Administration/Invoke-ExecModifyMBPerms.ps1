@@ -1,5 +1,3 @@
-using namespace System.Net
-
 Function Invoke-ExecModifyMBPerms {
     <#
     .FUNCTIONALITY
@@ -37,7 +35,7 @@ Function Invoke-ExecModifyMBPerms {
     if (-not $MailboxRequests -or $MailboxRequests.Count -eq 0) {
         Write-LogMessage -headers $Request.Headers -API $APINAME -message 'No mailbox requests provided' -Sev 'Error'
         $body = [pscustomobject]@{'Results' = @("No mailbox requests provided") }
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::BadRequest
             Body       = $Body
         })
@@ -295,9 +293,9 @@ Function Invoke-ExecModifyMBPerms {
     }
 
     if ($CmdletArray.Count -eq 0) {
-        Write-LogMessage -headers $Request.Headers -API $APINAME -message 'No valid cmdlets to process' -Sev 'Warning' -tenant $TenantFilter
+        Write-LogMessage -headers $Request.Headers -API $APINAME -message 'No valid cmdlets to process' -sev 'Warn' -tenant $TenantFilter
         $body = [pscustomobject]@{'Results' = @("No valid permission changes to process") }
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = $Body
         })
@@ -329,7 +327,7 @@ Function Invoke-ExecModifyMBPerms {
                                 Write-LogMessage -headers $Request.Headers -API $APINAME -message "Success for operation $operationGuid`: $($metadata.ExpectedResult)" -Sev 'Info' -tenant $TenantFilter
                             }
                         } else {
-                            Write-LogMessage -headers $Request.Headers -API $APINAME -message "Could not map result to operation. GUID: $operationGuid, Available GUIDs: $($GuidToMetadataMap.Keys -join ', ')" -Sev 'Warning' -tenant $TenantFilter
+                            Write-LogMessage -headers $Request.Headers -API $APINAME -message "Could not map result to operation. GUID: $operationGuid, Available GUIDs: $($GuidToMetadataMap.Keys -join ', ')" -sev 'Warn' -tenant $TenantFilter
 
                             # Fallback for unmapped results
                             if ($result.error) {
@@ -385,7 +383,7 @@ Function Invoke-ExecModifyMBPerms {
     }
 
     $body = [pscustomobject]@{'Results' = @($Results) }
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
         StatusCode = [HttpStatusCode]::OK
         Body       = $Body
     })

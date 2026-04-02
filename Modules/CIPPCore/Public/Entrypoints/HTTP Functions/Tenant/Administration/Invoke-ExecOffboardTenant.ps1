@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ExecOffboardTenant {
+function Invoke-ExecOffboardTenant {
     <#
     .FUNCTIONALITY
         Entrypoint
@@ -12,7 +10,7 @@ Function Invoke-ExecOffboardTenant {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     try {
         $TenantQuery = $Request.Body.TenantFilter.value ?? $Request.Body.TenantFilter
@@ -86,7 +84,7 @@ Function Invoke-ExecOffboardTenant {
                     $property = $_
                     $propertyContacts = $orgContacts.($($property))
 
-                    if ($propertyContacts -AND ($domains -notcontains ($propertyContacts | ForEach-Object { $_.Split('@')[1] }))) {
+                    if ($propertyContacts -and ($domains -notcontains ($propertyContacts | ForEach-Object { $_.Split('@')[1] }))) {
                         $newPropertyContent = [System.Collections.Generic.List[object]]($propertyContacts | Where-Object { $domains -notcontains $_.Split('@')[1] })
 
                         $patchContactBody = if (!($newPropertyContent)) { "{ `"$($property)`" : [] }" } else { [pscustomobject]@{ $property = $newPropertyContent } | ConvertTo-Json }
@@ -105,6 +103,29 @@ Function Invoke-ExecOffboardTenant {
                 # TODO Add logic for privacyProfile later - rvdwegen
 
             }
+
+            if ($request.body.RemoveDomainAnalyserData -eq $true) {
+                # Remove all Domain Analyser data for this tenant
+                try {
+                    $DomainTable = Get-CIPPTable -Table 'Domains'
+                    $Filter = "TenantGUID eq '{0}'" -f $TenantId
+                    $DomainEntries = Get-CIPPAzDataTableEntity @DomainTable -Filter $Filter
+                    
+                    if ($DomainEntries) {
+                        $DomainCount = ($DomainEntries | Measure-Object).Count
+                        foreach ($Domain in $DomainEntries) {
+                            Remove-AzDataTableEntity @DomainTable -Entity $Domain
+                        }
+                        $Results.Add("Successfully removed $DomainCount Domain Analyser entries")
+                        Write-LogMessage -headers $Request.Headers -API $APIName -message "Removed $DomainCount Domain Analyser entries" -Sev 'Info' -tenant $TenantFilter
+                    } else {
+                        $Results.Add('No Domain Analyser data found for this tenant')
+                    }
+                } catch {
+                    $Errors.Add("Failed to remove Domain Analyser data: $($_.Exception.message)")
+                }
+            }
+
             $VendorApps = $Request.Body.vendorApplications
             if ($VendorApps) {
                 $VendorApps | ForEach-Object {
@@ -192,7 +213,7 @@ Function Invoke-ExecOffboardTenant {
         $StatusCode = [HttpStatusCode]::OK
         $body = $_.Exception.message
     }
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = $Body
         })

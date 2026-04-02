@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ExecGDAPRoleTemplate {
+function Invoke-ExecGDAPRoleTemplate {
     <#
     .FUNCTIONALITY
         Entrypoint,AnyTenant
@@ -12,7 +10,7 @@ Function Invoke-ExecGDAPRoleTemplate {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     $Table = Get-CIPPTable -TableName 'GDAPRoleTemplates'
     $Templates = Get-CIPPAzDataTableEntity @Table
@@ -20,7 +18,7 @@ Function Invoke-ExecGDAPRoleTemplate {
     if ($Request.Query.TemplateId) {
         $Template = $Templates | Where-Object -Property RowKey -EQ $Request.Query.TemplateId
         if (!$Template) {
-            Write-LogMessage -headers $Headers -API $APIName -message "GDAP role template '$($Request.Query.TemplateId)' not found" -Sev 'Warning'
+            Write-LogMessage -headers $Headers -API $APIName -message "GDAP role template '$($Request.Query.TemplateId)' not found" -sev 'Warn'
             $Body = @{}
         } else {
             Write-LogMessage -headers $Headers -API $APIName -message "Retrieved GDAP role template '$($Request.Query.TemplateId)'" -Sev 'Info'
@@ -46,19 +44,33 @@ Function Invoke-ExecGDAPRoleTemplate {
                 }
             }
             'Edit' {
-                $RowKey = $Request.Body.TemplateId
-                $Template = $Templates | Where-Object -Property RowKey -EQ $RowKey
+                # Use OriginalTemplateId if provided (for rename), otherwise use TemplateId
+                $OriginalRowKey = $Request.Body.OriginalTemplateId ?? $Request.Body.TemplateId
+                $NewRowKey = $Request.Body.TemplateId
+                $Template = $Templates | Where-Object -Property RowKey -EQ $OriginalRowKey
                 if ($Template) {
                     $RoleMappings = $Request.Body.RoleMappings
-                    Add-CIPPGDAPRoleTemplate -TemplateId $RowKey -RoleMappings $RoleMappings -Overwrite
-                    Write-LogMessage -headers $Headers -API $APIName -message "Updated role mappings for GDAP template '$RowKey'" -Sev 'Info'
-                    $Body = @{
-                        Results = "Updated role mappings for template $RowKey"
+
+                    # If the template ID is being changed, delete the old one and create a new one
+                    if ($OriginalRowKey -ne $NewRowKey) {
+                        Remove-AzDataTableEntity -Force @Table -Entity $Template
+                        Add-CIPPGDAPRoleTemplate -TemplateId $NewRowKey -RoleMappings $RoleMappings -Overwrite
+                        Write-LogMessage -headers $Headers -API $APIName -message "Renamed GDAP template from '$OriginalRowKey' to '$NewRowKey' and updated role mappings" -Sev 'Info'
+                        $Body = @{
+                            Results = "Renamed template from $OriginalRowKey to $NewRowKey and updated role mappings"
+                        }
+                    } else {
+                        # Just update the existing template
+                        Add-CIPPGDAPRoleTemplate -TemplateId $NewRowKey -RoleMappings $RoleMappings -Overwrite
+                        Write-LogMessage -headers $Headers -API $APIName -message "Updated role mappings for GDAP template '$NewRowKey'" -Sev 'Info'
+                        $Body = @{
+                            Results = "Updated role mappings for template $NewRowKey"
+                        }
                     }
                 } else {
-                    Write-LogMessage -headers $Headers -API $APIName -message "GDAP role template '$RowKey' not found for editing" -Sev 'Warning'
+                    Write-LogMessage -headers $Headers -API $APIName -message "GDAP role template '$OriginalRowKey' not found for editing" -sev 'Warn'
                     $Body = @{
-                        Results = "Template $RowKey not found"
+                        Results = "Template $OriginalRowKey not found"
                     }
                 }
             }
@@ -72,7 +84,7 @@ Function Invoke-ExecGDAPRoleTemplate {
                         Results = "Deleted template $RowKey"
                     }
                 } else {
-                    Write-LogMessage -headers $Headers -API $APIName -message "GDAP role template '$RowKey' not found for deletion" -Sev 'Warning'
+                    Write-LogMessage -headers $Headers -API $APIName -message "GDAP role template '$RowKey' not found for deletion" -sev 'Warn'
                     $Body = @{
                         Results = "Template $RowKey not found"
                     }
@@ -96,8 +108,7 @@ Function Invoke-ExecGDAPRoleTemplate {
         }
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = $Body
         })

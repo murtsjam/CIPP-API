@@ -7,10 +7,8 @@ function Invoke-ExecAppPermissionTemplate {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     $Table = Get-CIPPTable -TableName 'AppPermissions'
 
@@ -75,7 +73,6 @@ function Invoke-ExecAppPermissionTemplate {
             if ($Request.Query.TemplateId) {
                 $templateId = $Request.Query.TemplateId
                 $filter = "PartitionKey eq 'Templates' and RowKey eq '$templateId'"
-                Write-LogMessage -headers $Headers -API 'ExecAppPermissionTemplate' -message "Retrieved specific template: $templateId" -Sev 'Info'
             }
 
             $Body = Get-CIPPAzDataTableEntity @Table -Filter $filter | ForEach-Object {
@@ -90,7 +87,7 @@ function Invoke-ExecAppPermissionTemplate {
         }
     }
 
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = ConvertTo-Json -Depth 10 -InputObject @($Body)
         })

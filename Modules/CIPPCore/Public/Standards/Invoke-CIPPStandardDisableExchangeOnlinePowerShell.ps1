@@ -7,22 +7,23 @@ function Invoke-CIPPStandardDisableExchangeOnlinePowerShell {
     .SYNOPSIS
         (Label) Disable Exchange Online PowerShell for non-admin users
     .DESCRIPTION
-        (Helptext) Disables the ability for non-admin users to use Exchange Online PowerShell. Only administrators will be able to use PowerShell to connect to Exchange Online.
-        (DocsDescription) Disables the ability for non-admin users to use Exchange Online PowerShell. This helps prevent attackers from using PowerShell to run malicious commands, access file systems, registry, and distribute ransomware throughout networks. Only administrators will be able to use PowerShell to connect to Exchange Online, aligning with a least privileged access approach to security.
+        (Helptext) Disables Exchange Online PowerShell access for non-admin users by setting the RemotePowerShellEnabled property to false for each user. This helps prevent attackers from using PowerShell to run malicious commands, access file systems, registry, and distribute ransomware throughout networks. Users with admin roles are automatically excluded.
+        (DocsDescription) Disables Exchange Online PowerShell access for non-admin users by setting the RemotePowerShellEnabled property to false for each user. This security measure follows a least privileged access approach, preventing potential attackers from using PowerShell to execute malicious commands, access sensitive systems, or distribute malware. Users with management roles containing 'Admin' are automatically excluded to ensure administrators retain PowerShell access to perform necessary management tasks.
     .NOTES
         CAT
             Exchange Standards
         TAG
-            "CIS"
-            "PowerShell"
+            "CIS M365 5.0 (6.1.1)"
             "Security"
-        ADDEDCOMPONENT
+            "NIST CSF 2.0 (PR.AA-05)"
+        EXECUTIVETEXT
+            Restricts PowerShell access to Exchange Online for regular employees while maintaining access for administrators, significantly reducing security risks from compromised accounts. This prevents attackers from using PowerShell to execute malicious commands or distribute ransomware while preserving necessary administrative capabilities.
         IMPACT
             Medium Impact
         ADDEDDATE
             2025-06-19
         POWERSHELLEQUIVALENT
-            Get-User -ResultSize Unlimited -Filter 'RemotePowerShellEnabled -eq $true' | ForEach-Object { Set-User -Identity $_.Identity -RemotePowerShellEnabled $false }
+            Set-User -Identity \$user -RemotePowerShellEnabled \$false
         RECOMMENDEDBY
             "CIS"
             "CIPP"
@@ -36,7 +37,6 @@ function Invoke-CIPPStandardDisableExchangeOnlinePowerShell {
     $TestResult = Test-CIPPStandardLicense -StandardName 'DisableExchangeOnlinePowerShell' -TenantFilter $Tenant -RequiredCapabilities @('EXCHANGE_S_STANDARD', 'EXCHANGE_S_ENTERPRISE', 'EXCHANGE_S_STANDARD_GOV', 'EXCHANGE_S_ENTERPRISE_GOV', 'EXCHANGE_LITE') #No Foundation because that does not allow powershell access
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
     ##$Rerun -Type Standard -Tenant $Tenant -Settings $Settings 'DisableExchangeOnlinePowerShell'
@@ -57,22 +57,21 @@ function Invoke-CIPPStandardDisableExchangeOnlinePowerShell {
         if ($PowerShellEnabledCount -gt 0) {
             Write-LogMessage -API 'Standards' -tenant $Tenant -message "Started disabling Exchange Online PowerShell for $PowerShellEnabledCount users." -sev Info
 
-            $Request = $UsersWithPowerShell | ForEach-Object {
+            $Request = foreach ($User in $UsersWithPowerShell) {
                 @{
                     CmdletInput = @{
                         CmdletName = 'Set-User'
-                        Parameters = @{Identity = $_.Guid; RemotePowerShellEnabled = $false }
+                        Parameters = @{Identity = $User.Guid; RemotePowerShellEnabled = $false }
                     }
                 }
             }
 
             $BatchResults = New-ExoBulkRequest -tenantid $tenant -cmdletArray @($Request)
             $SuccessCount = 0
-            $BatchResults | ForEach-Object {
-                if ($_.error) {
-                    $ErrorMessage = Get-NormalizedError -Message $_.error
-                    Write-Host "Failed to disable Exchange Online PowerShell for $($_.target). Error: $ErrorMessage"
-                    Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to disable Exchange Online PowerShell for $($_.target). Error: $ErrorMessage" -sev Error
+            foreach ($Result in $BatchResults) {
+                if ($Result.error) {
+                    $ErrorMessage = Get-NormalizedError -Message $Result.error
+                    Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to disable Exchange Online PowerShell for $($Result.target). Error: $ErrorMessage" -sev Error
                 } else {
                     $SuccessCount++
                 }
@@ -94,8 +93,14 @@ function Invoke-CIPPStandardDisableExchangeOnlinePowerShell {
     }
 
     if ($Settings.report -eq $true) {
-        $state = $StateIsCorrect ?? @{UsersWithPowerShellEnabled = $PowerShellEnabledCount }
-        Set-CIPPStandardsCompareField -FieldName 'standards.DisableExchangeOnlinePowerShell' -FieldValue $state -TenantFilter $Tenant
+        $CurrentValue = [PSCustomObject]@{
+            UsersWithPowerShellEnabled = $PowerShellEnabledCount
+        }
+        $ExpectedValue = [PSCustomObject]@{
+            UsersWithPowerShellEnabled = 0
+        }
+
+        Set-CIPPStandardsCompareField -FieldName 'standards.DisableExchangeOnlinePowerShell' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -TenantFilter $Tenant
         Add-CIPPBPAField -FieldName 'ExchangeOnlinePowerShellDisabled' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $tenant
     }
 }

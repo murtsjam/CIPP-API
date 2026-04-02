@@ -1,7 +1,7 @@
 function Invoke-ListCippQueue {
     <#
     .FUNCTIONALITY
-        Entrypoint
+        Entrypoint,AnyTenant
     .ROLE
         CIPP.Core.Read
     #>
@@ -74,7 +74,7 @@ function Invoke-ListCippQueue {
     }
 
     if ($request) {
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
                 StatusCode = [HttpStatusCode]::OK
                 Body       = @($QueueData)
             })

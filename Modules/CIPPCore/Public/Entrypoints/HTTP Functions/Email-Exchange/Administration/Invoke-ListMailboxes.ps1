@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ListMailboxes {
+function Invoke-ListMailboxes {
     <#
     .FUNCTIONALITY
         Entrypoint
@@ -9,14 +7,29 @@ Function Invoke-ListMailboxes {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-
     # Interact with query parameters or the body of the request.
     $TenantFilter = $Request.Query.tenantFilter
+    $UseReportDB = $Request.Query.UseReportDB
+
     try {
+        # If UseReportDB is specified, retrieve from report database
+        if ($UseReportDB -eq 'true') {
+            try {
+                $GraphRequest = Get-CIPPMailboxesReport -TenantFilter $TenantFilter -ErrorAction Stop
+                $StatusCode = [HttpStatusCode]::OK
+            } catch {
+                Write-Host "Error retrieving mailboxes from report database: $($_.Exception.Message)"
+                $StatusCode = [HttpStatusCode]::InternalServerError
+                $GraphRequest = $_.Exception.Message
+            }
+
+            return ([HttpResponseContext]@{
+                    StatusCode = $StatusCode
+                    Body       = @($GraphRequest)
+                })
+        }
+
+        # Original live EXO logic
         $Select = 'id,ExchangeGuid,ArchiveGuid,UserPrincipalName,DisplayName,PrimarySMTPAddress,RecipientType,RecipientTypeDetails,EmailAddresses,WhenSoftDeleted,IsInactiveMailbox,ForwardingSmtpAddress,DeliverToMailboxAndForward,ForwardingAddress,HiddenFromAddressListsEnabled,ExternalDirectoryObjectId,MessageCopyForSendOnBehalfEnabled,MessageCopyForSentAsEnabled,PersistedCapabilities,LitigationHoldEnabled,LitigationHoldDate,LitigationHoldDuration,ComplianceTagHoldApplied,RetentionHoldEnabled,InPlaceHolds,RetentionPolicy'
         $ExoRequest = @{
             tenantid  = $TenantFilter
@@ -73,7 +86,7 @@ Function Invoke-ListMailboxes {
         LitigationHoldEnabled,
         LitigationHoldDate,
         LitigationHoldDuration,
-        @{ Name = 'LicensedForLitigationHold'; Expression = { ($_.PersistedCapabilities -contains 'BPOS_S_DlpAddOn' -or $_.PersistedCapabilities -contains 'BPOS_S_Enterprise') } },
+        @{ Name = 'LicensedForLitigationHold'; Expression = { ($_.PersistedCapabilities -contains 'EXCHANGE_S_ARCHIVE_ADDON' -or $_.PersistedCapabilities -contains 'BPOS_S_ArchiveAddOn' -or $_.PersistedCapabilities -contains 'EXCHANGE_S_ENTERPRISE' -or $_.PersistedCapabilities -contains 'BPOS_S_DlpAddOn' -or $_.PersistedCapabilities -contains 'BPOS_S_Enterprise') } },
         ComplianceTagHoldApplied,
         RetentionHoldEnabled,
         InPlaceHolds,
@@ -87,8 +100,7 @@ Function Invoke-ListMailboxes {
         $StatusCode = [HttpStatusCode]::Forbidden
         $GraphRequest = $ErrorMessage
     }
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @($GraphRequest)
         })

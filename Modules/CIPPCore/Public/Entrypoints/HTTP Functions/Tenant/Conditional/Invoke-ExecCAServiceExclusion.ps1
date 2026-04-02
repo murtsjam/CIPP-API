@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ExecCAServiceExclusion {
+function Invoke-ExecCAServiceExclusion {
     <#
     .FUNCTIONALITY
         Entrypoint
@@ -9,10 +7,8 @@ Function Invoke-ExecCAServiceExclusion {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     # Interact with the request
     $TenantFilter = $Request.Query.tenantFilter ?? $Request.Body.tenantFilter
@@ -21,15 +17,15 @@ Function Invoke-ExecCAServiceExclusion {
     try {
         $result = Set-CIPPCAPolicyServiceException -TenantFilter $TenantFilter -PolicyId $ID
         $Body = @{ Results = $result }
-        Write-LogMessage -headers $Headers -API 'Set-CIPPCAPolicyServiceException' -message $Message -Sev 'Info' -tenant $TenantFilter
+        Write-LogMessage -headers $Headers -API 'Set-CIPPCAPolicyServiceException' -message $result -Sev 'Info' -tenant $TenantFilter
     } catch {
         $ErrorMessage = Get-CippException -Exception $_
         $Body = @{ Results = "Failed to add service provider exception to policy $($ID): $($ErrorMessage.NormalizedError)" }
-        Write-LogMessage -headers $Headers -API 'Set-CIPPCAPolicyServiceException' -message "Failed to update policy $($PolicyId) with service provider exception for tenant $($CSPtenantId): $($_.Exception.Message)" -Sev 'Error' -tenant $TenantFilter -LogData (Get-CippException -Exception $_)
+        Write-LogMessage -headers $Headers -API 'Set-CIPPCAPolicyServiceException' -message "Failed to update policy $($ID) with service provider exception for tenant $($env:TenantID): $($ErrorMessage.NormalizedError)" -Sev 'Error' -tenant $TenantFilter -LogData (Get-CippException -Exception $_)
     }
 
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
-        StatusCode = [HttpStatusCode]::OK
-        Body       = $Body
-    })
+    return ([HttpResponseContext]@{
+            StatusCode = [HttpStatusCode]::OK
+            Body       = $Body
+        })
 }

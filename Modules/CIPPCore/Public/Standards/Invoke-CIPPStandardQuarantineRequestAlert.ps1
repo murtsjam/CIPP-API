@@ -13,6 +13,8 @@ function Invoke-CIPPStandardQuarantineRequestAlert {
         CAT
             Defender Standards
         TAG
+        EXECUTIVETEXT
+            Notifies IT administrators when employees request to release emails that were quarantined for security reasons, enabling oversight of potentially dangerous messages. This helps ensure that legitimate emails are released while maintaining security controls over suspicious content.
         ADDEDCOMPONENT
             {"type":"textField","name":"standards.QuarantineRequestAlert.NotifyUser","label":"E-mail to receive the alert"}
         IMPACT
@@ -32,17 +34,13 @@ function Invoke-CIPPStandardQuarantineRequestAlert {
     $TestResult = Test-CIPPStandardLicense -StandardName 'QuarantineRequestAlert' -TenantFilter $Tenant -RequiredCapabilities @('EXCHANGE_S_STANDARD', 'EXCHANGE_S_ENTERPRISE', 'EXCHANGE_S_STANDARD_GOV', 'EXCHANGE_S_ENTERPRISE_GOV', 'EXCHANGE_LITE') #No Foundation because that does not allow powershell access
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
     $PolicyName = 'CIPP User requested to release a quarantined message'
 
     try {
-        $CurrentState = New-ExoRequest -TenantId $Tenant -cmdlet 'Get-ProtectionAlert' -Compliance |
-        Where-Object { $_.Name -eq $PolicyName } |
-        Select-Object -Property *
-    }
-    catch {
+        $CurrentState = New-ExoRequest -TenantId $Tenant -cmdlet 'Get-ProtectionAlert' -Compliance | Where-Object { $_.Name -eq $PolicyName }
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the QuarantineRequestAlert state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -99,11 +97,12 @@ function Invoke-CIPPStandardQuarantineRequestAlert {
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'QuarantineRequestAlert' -FieldValue $StateIsCorrect -StoreAs bool -Tenant $Tenant
 
-        if ($StateIsCorrect) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = @{NotifyUser = $CurrentState.notifyUser }
+        $CurrentValue = @{
+            NotifyUser = @($CurrentState.NotifyUser)
         }
-        Set-CIPPStandardsCompareField -FieldName 'standards.QuarantineRequestAlert' -FieldValue $FieldValue -Tenant $Tenant
+        $ExpectedValue = @{
+            NotifyUser = @($Settings.NotifyUser)
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.QuarantineRequestAlert' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $Tenant
     }
 }

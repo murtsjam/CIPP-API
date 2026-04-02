@@ -1,6 +1,4 @@
-using namespace System.Net
-
-Function Invoke-ListSites {
+function Invoke-ListSites {
     <#
     .FUNCTIONALITY
         Entrypoint
@@ -9,29 +7,25 @@ Function Invoke-ListSites {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -Headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     $TenantFilter = $Request.Query.TenantFilter
-    $Type = $request.query.Type
-    $UserUPN = $request.query.UserUPN
+    $Type = $Request.Query.Type
+    $UserUPN = $Request.Query.UserUPN
 
     if (!$TenantFilter) {
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
                 StatusCode = [HttpStatusCode]::BadRequest
                 Body       = 'TenantFilter is required'
             })
-        return
     }
 
     if (!$Type) {
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
                 StatusCode = [HttpStatusCode]::BadRequest
                 Body       = 'Type is required'
             })
-        return
     }
 
     $Tenant = Get-Tenants -TenantFilter $TenantFilter
@@ -116,8 +110,7 @@ Function Invoke-ListSites {
         $GraphRequest = $GraphRequest | Where-Object { $null -ne $_.webUrl }
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @($GraphRequest | Sort-Object -Property displayName)
         })

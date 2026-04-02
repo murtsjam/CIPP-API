@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-listStandardTemplates {
     <#
     .FUNCTIONALITY
@@ -9,10 +7,6 @@ function Invoke-listStandardTemplates {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -Headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
     # Interact with query parameters or the body of the request.
     $ID = $Request.Query.id
     $Table = Get-CippTable -tablename 'templates'
@@ -29,6 +23,8 @@ function Invoke-listStandardTemplates {
         }
         if ($Data) {
             $Data | Add-Member -NotePropertyName 'GUID' -NotePropertyValue $_.GUID -Force
+            $Data | Add-Member -NotePropertyName 'source' -NotePropertyValue $_.Source -Force
+            $Data | Add-Member -NotePropertyName 'isSynced' -NotePropertyValue (![string]::IsNullOrEmpty($_.SHA)) -Force
 
             if (!$Data.excludedTenants) {
                 $Data | Add-Member -NotePropertyName 'excludedTenants' -NotePropertyValue @() -Force
@@ -44,8 +40,7 @@ function Invoke-listStandardTemplates {
     } | Sort-Object -Property templateName
 
     if ($ID) { $Templates = $Templates | Where-Object GUID -EQ $ID }
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = @($Templates)
         })

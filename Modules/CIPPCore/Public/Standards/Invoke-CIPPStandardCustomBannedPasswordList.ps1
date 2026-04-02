@@ -5,17 +5,17 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
     .COMPONENT
         (APIName) CustomBannedPasswordList
     .SYNOPSIS
-        (Label) Update Entra ID Custom Banned Password List
+        (Label) Set Entra ID Custom Banned Password List
     .DESCRIPTION
-        (Helptext) Updates the Entra ID custom banned password list with organization-specific terms. Requires Entra ID P1 or P2 licenses. Enter words separated by commas or new lines. Each word must be 4-16 characters long. Maximum 1,000 words allowed.
-        (DocsDescription) Updates the Entra ID custom banned password list with organization-specific terms that should be blocked from user passwords. This supplements the global banned password list maintained by Microsoft. The custom list is limited to 1,000 key base terms of 4-16 characters each. Entra ID will block variations and combinations of these terms in user passwords.
+        (Helptext) **Requires Entra ID P1.** Updates and enables the Entra ID custom banned password list with the supplied words. Enter words separated by commas or semicolons. Each word must be 4-16 characters long. Maximum 1,000 words allowed.
+        (DocsDescription) Updates and enables the Entra ID custom banned password list with the supplied words. This supplements the global banned password list maintained by Microsoft. The custom list is limited to 1,000 key base terms of 4-16 characters each. Entra ID will [block variations and common substitutions](https://learn.microsoft.com/en-us/entra/identity/authentication/tutorial-configure-custom-password-protection#configure-custom-banned-passwords) of these words in user passwords. [How are passwords evaluated?](https://learn.microsoft.com/en-us/entra/identity/authentication/concept-password-ban-bad#score-calculation)
     .NOTES
         CAT
-            Global Standards
+            Entra (AAD) Standards
         TAG
             "CIS M365 5.0 (5.2.3.2)"
         ADDEDCOMPONENT
-            {"type":"textArea","name":"standards.CustomBannedPasswordList.BannedWords","label":"Banned Words List","placeholder":"Enter banned words separated by commas or new lines (4-16 characters each, max 1000 words)","required":true,"rows":10}
+            {"type":"textField","name":"standards.CustomBannedPasswordList.BannedWords","label":"Banned Words","placeholder":"Banned words separated by commas or semicolons","required":true}
         IMPACT
             Medium Impact
         ADDEDDATE
@@ -23,7 +23,7 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
         POWERSHELLEQUIVALENT
             Get-MgBetaDirectorySetting, New-MgBetaDirectorySetting, Update-MgBetaDirectorySetting
         RECOMMENDEDBY
-            "CIS", "CIPP"
+            "CIS"
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
@@ -31,7 +31,13 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
     #>
 
     param($Tenant, $Settings)
-    Write-Host "All params received: $Tenant, $tenant, $($Settings | ConvertTo-Json -Depth 10 -Compress)"
+
+    $TestResult = Test-CIPPStandardLicense -StandardName 'CustomBannedPasswordList' -TenantFilter $Tenant -RequiredCapabilities @('AAD_PREMIUM', 'AAD_PREMIUM_P2')
+
+    if ($TestResult -eq $false) {
+        return $true
+    } #we're done.
+
     $PasswordRuleTemplateId = '5cf42378-d67d-4f36-ba46-e8b86229381d'
     # Parse and validate banned words from input
     $BannedWordsInput = $Settings.BannedWords
@@ -42,12 +48,6 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
 
     # Split input by commas, newlines, or semicolons and clean up
     $BannedWordsList = $BannedWordsInput -split '[,;\r\n]+' | ForEach-Object { ($_.Trim()) } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-
-    # Validate word count
-    if ($BannedWordsList.Count -gt 1000) {
-        Write-LogMessage -API 'Standards' -tenant $tenant -message "CustomBannedPasswordList: Too many banned words provided ($($BannedWordsList.Count)). Maximum allowed is 1000." -sev Error
-        return
-    }
 
     # Validate word length (4-16 characters), remove duplicates and invalid words
     $ValidBannedWordsList = [System.Collections.Generic.List[string]]::new()
@@ -67,6 +67,12 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
         Write-LogMessage -API 'Standards' -tenant $tenant -message "CustomBannedPasswordList: Invalid words found in input (must be 4-16 characters). Please remove the following words: $($InvalidWords -join ', ')" -sev Warning
     }
 
+    # Validate word count after filtering
+    if ($BannedWordsList.Count -gt 1000) {
+        Write-LogMessage -API 'Standards' -tenant $tenant -message "CustomBannedPasswordList: Too many valid banned words ($($BannedWordsList.Count)). Maximum allowed is 1000." -sev Error
+        return
+    }
+
     # Get existing directory settings for password rules
     try {
         $ExistingSettings = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/settings' -tenantid $Tenant | Where-Object { $_.templateId -eq $PasswordRuleTemplateId }
@@ -77,10 +83,7 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
     }
 
     if ($Settings.remediate -eq $true) {
-        Write-Host 'Time to remediate Custom Banned Password List'
-
         if ($null -eq $ExistingSettings) {
-            Write-Host 'No existing Custom Banned Password List found, creating new one'
             # Create new directory setting with default values if it doesn't exist
             try {
                 $Body = @{
@@ -121,7 +124,6 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
                 Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to create Custom Banned Password List: $($ErrorMessage.NormalizedError)" -sev Error -LogData $ErrorMessage
             }
         } else {
-            Write-Host 'Existing Custom Banned Password List found, updating it'
             # Update existing directory setting
             try {
                 # Get the current passwords and check if all the new words are already in the list
@@ -131,13 +133,11 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
                 # Check if the new words are already in the list
                 $NewBannedWords = $BannedWordsList | Where-Object { $CurrentBannedWords -notcontains $_ }
                 if ($NewBannedWords.Count -eq 0 -and ($ExistingSettings.values | Where-Object { $_.name -eq 'EnableBannedPasswordCheck' }).value -eq 'True') {
-                    Write-Host 'No new words to add'
                     Write-LogMessage -API 'Standards' -tenant $Tenant -message "Custom Banned Password List is already configured with $($CurrentBannedWords.Count) words." -sev Info
                 } else {
-                    Write-Host "$($NewBannedWords.Count) new words to add"
                     $AllBannedWords = [System.Collections.Generic.List[string]]::new()
-                    $NewBannedWords | ForEach-Object { $AllBannedWords.Add($_) }
-                    $CurrentBannedWords | ForEach-Object { $AllBannedWords.Add($_) }
+                    foreach ($Word in $NewBannedWords) { $AllBannedWords.Add($Word) }
+                    foreach ($Word in $CurrentBannedWords) { $AllBannedWords.Add($Word) }
                     $AllBannedWords = $AllBannedWords | Select-Object -Unique -First 1000 | Where-Object { $_ -ne $null }
 
                     $Body = @{
@@ -203,6 +203,14 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
     }
 
     if ($Settings.report -eq $true) {
+        $ExpectedValue = @{
+            Status            = 'Configured'
+            Enabled           = $true
+            WordCount         = $BannedWordsList.Count
+            Compliant         = $true
+            MissingInputWords = @()
+        }
+
         if ($null -eq $ExistingSettings) {
             $BannedPasswordState = @{
                 Status            = 'Not Configured'
@@ -229,7 +237,7 @@ function Invoke-CIPPStandardCustomBannedPasswordList {
             }
         }
 
-        Add-CIPPBPAField -FieldName 'CustomBannedPasswordList' -FieldValue $BannedPasswordState -StoreAs json -Tenant $tenant
+        Add-CIPPBPAField -FieldName 'CustomBannedPasswordList' -CurrentValue $BannedPasswordState -ExpectedValue $ExpectedValue -StoreAs json -Tenant $tenant
         Set-CIPPStandardsCompareField -FieldName 'standards.CustomBannedPasswordList' -FieldValue $BannedPasswordState.Compliant -Tenant $tenant
     }
 

@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ExecSyncVPP {
     <#
     .FUNCTIONALITY
@@ -11,9 +9,8 @@ function Invoke-ExecSyncVPP {
     param($Request, $TriggerMetadata)
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -Headers $Headers -API $APIName -message 'Accessed this API' -Sev Debug
 
-    $TenantFilter = $Request.Body.tenantFilter ?? $Request.Query.tenantFilter
+    $TenantFilter = $Request.Body.tenantFilter
     try {
         # Get all VPP tokens and sync them
         $VppTokens = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/deviceAppManagement/vppTokens' -tenantid $TenantFilter | Where-Object { $_.state -eq 'valid' }
@@ -38,8 +35,7 @@ function Invoke-ExecSyncVPP {
         $StatusCode = [HttpStatusCode]::Forbidden
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = @{ Results = $Result }
         })

@@ -13,6 +13,8 @@ function Invoke-CIPPStandardTenantDefaultTimezone {
         CAT
             SharePoint Standards
         TAG
+        EXECUTIVETEXT
+            Standardizes the timezone setting across all SharePoint sites and new user accounts, ensuring consistent scheduling and time-based operations throughout the organization. This improves collaboration efficiency and reduces confusion in global or multi-timezone organizations.
         ADDEDCOMPONENT
             {"type":"TimezoneSelect","name":"standards.TenantDefaultTimezone.Timezone","label":"Timezone"}
         IMPACT
@@ -29,18 +31,15 @@ function Invoke-CIPPStandardTenantDefaultTimezone {
     #>
 
     param($Tenant, $Settings)
-    $TestResult = Test-CIPPStandardLicense -StandardName 'TenantDefaultTimezone' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU','ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
-    ##$Rerun -Type Standard -Tenant $Tenant -Settings $Settings 'TenantDefaultTimezone'
+    $TestResult = Test-CIPPStandardLicense -StandardName 'TenantDefaultTimezone' -TenantFilter $Tenant -RequiredCapabilities @('SHAREPOINTWAC', 'SHAREPOINTSTANDARD', 'SHAREPOINTENTERPRISE', 'SHAREPOINTENTERPRISE_EDU', 'ONEDRIVE_BASIC', 'ONEDRIVE_ENTERPRISE')
 
     if ($TestResult -eq $false) {
-        Write-Host "We're exiting as the correct license is not present for this standard."
         return $true
     } #we're done.
 
     try {
         $CurrentState = New-GraphGetRequest -Uri 'https://graph.microsoft.com/beta/admin/sharepoint/settings' -tenantid $Tenant -AsApp $true
-    }
-    catch {
+    } catch {
         $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
         Write-LogMessage -API 'Standards' -Tenant $Tenant -Message "Could not get the TenantDefaultTimezone state for $Tenant. Error: $ErrorMessage" -Sev Error
         return
@@ -80,11 +79,12 @@ function Invoke-CIPPStandardTenantDefaultTimezone {
 
     if ($Settings.report -eq $true) {
         Add-CIPPBPAField -FieldName 'TenantDefaultTimezone' -FieldValue $CurrentState.tenantDefaultTimezone -StoreAs string -Tenant $Tenant
-        if ($StateIsCorrect) {
-            $FieldValue = $true
-        } else {
-            $FieldValue = $CurrentState | Select-Object tenantDefaultTimezone
+        $CurrentValue = @{
+            tenantDefaultTimezone = $CurrentState.tenantDefaultTimezone
         }
-        Set-CIPPStandardsCompareField -FieldName 'standards.TenantDefaultTimezone' -FieldValue $FieldValue -Tenant $Tenant
+        $ExpectedValue = @{
+            tenantDefaultTimezone = $ExpectedTimezone
+        }
+        Set-CIPPStandardsCompareField -FieldName 'standards.TenantDefaultTimezone' -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -Tenant $Tenant
     }
 }

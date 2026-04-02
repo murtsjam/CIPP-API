@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-EditUser {
     <#
     .FUNCTIONALITY
@@ -12,12 +10,12 @@ function Invoke-EditUser {
 
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
     $UserObj = $Request.Body
     if ([string]::IsNullOrWhiteSpace($UserObj.id)) {
         $body = @{'Results' = @('Failed to edit user. No user ID provided') }
-        Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+        return ([HttpResponseContext]@{
                 StatusCode = [HttpStatusCode]::BadRequest
                 Body       = $Body
             })
@@ -34,6 +32,17 @@ function Invoke-EditUser {
     try {
         Write-Host "$([boolean]$UserObj.MustChangePass)"
         $UserPrincipalName = "$($UserObj.username)@$($UserObj.Domain ? $UserObj.Domain : $UserObj.primDomain.value)"
+        $normalizedOtherMails = @(
+            @($UserObj.otherMails) | ForEach-Object {
+                if ($null -ne $_) {
+                    [string]$_ -split ','
+                }
+            } | ForEach-Object {
+                $_.Trim()
+            } | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            }
+        )
         $BodyToship = [pscustomobject] @{
             'givenName'         = $UserObj.givenName
             'surname'           = $UserObj.surname
@@ -51,7 +60,7 @@ function Invoke-EditUser {
             'country'           = $UserObj.country
             'companyName'       = $UserObj.companyName
             'businessPhones'    = $UserObj.businessPhones ? @($UserObj.businessPhones) : @()
-            'otherMails'        = $UserObj.otherMails ? @($UserObj.otherMails) : @()
+            'otherMails'        = $normalizedOtherMails
             'passwordProfile'   = @{
                 'forceChangePasswordNextSignIn' = [bool]$UserObj.MustChangePass
             }
@@ -61,10 +70,17 @@ function Invoke-EditUser {
         }
         if ($UserObj.defaultAttributes) {
             $UserObj.defaultAttributes | Get-Member -MemberType NoteProperty | ForEach-Object {
-                Write-Host "Editing user and adding $($_.Name) with value $($UserObj.defaultAttributes.$($_.Name).value)"
                 if (-not [string]::IsNullOrWhiteSpace($UserObj.defaultAttributes.$($_.Name).value)) {
-                    Write-Host 'adding body to ship'
+                    Write-Host "Editing user and adding $($_.Name) with value $($UserObj.defaultAttributes.$($_.Name).value)"
                     $BodyToShip | Add-Member -NotePropertyName $_.Name -NotePropertyValue $UserObj.defaultAttributes.$($_.Name).value -Force
+                }
+            }
+        }
+        if ($UserObj.customData) {
+            $UserObj.customData | Get-Member -MemberType NoteProperty | ForEach-Object {
+                if (-not [string]::IsNullOrWhiteSpace($UserObj.customData.$($_.Name))) {
+                    Write-Host "Editing user and adding custom data $($_.Name) with value $($UserObj.customData.$($_.Name))"
+                    $BodyToShip | Add-Member -NotePropertyName $_.Name -NotePropertyValue $UserObj.customData.$($_.Name) -Force
                 }
             }
         }
@@ -99,9 +115,10 @@ function Invoke-EditUser {
                         value = 'Set-CIPPUserLicense'
                     }
                     Parameters    = [pscustomobject]@{
-                        UserId      = $UserObj.id
-                        APIName     = 'Sherweb License Assignment'
-                        AddLicenses = $licenses
+                        UserId            = $UserObj.id
+                        APIName           = 'Sherweb License Assignment'
+                        AddLicenses       = $licenses
+                        UserPrincipalName = $UserPrincipalName
                     }
                     ScheduledTime = 0 #right now, which is in the next 15 minutes and should cover most cases.
                     PostExecution = @{
@@ -119,12 +136,12 @@ function Invoke-EditUser {
                     $Results.Add( 'Success. User license is already correct.' )
                 } else {
                     if ($UserObj.removeLicenses) {
-                        $licResults = Set-CIPPUserLicense -UserId $UserObj.id -TenantFilter $UserObj.tenantFilter -RemoveLicenses $CurrentLicenses.assignedLicenses.skuId -Headers $Headers
+                        $licResults = Set-CIPPUserLicense -UserPrincipalName $UserPrincipalName -UserId $UserObj.id -TenantFilter $UserObj.tenantFilter -RemoveLicenses $CurrentLicenses.assignedLicenses.skuId -Headers $Headers -APIName $APIName
                         $Results.Add($licResults)
                     } else {
                         #Remove all objects from $CurrentLicenses.assignedLicenses.skuId that are in $licenses
                         $RemoveLicenses = $CurrentLicenses.assignedLicenses.skuId | Where-Object { $_ -notin $licenses }
-                        $licResults = Set-CIPPUserLicense -UserId $UserObj.id -TenantFilter $UserObj.tenantFilter -RemoveLicenses $RemoveLicenses -AddLicenses $licenses -Headers $headers
+                        $licResults = Set-CIPPUserLicense -UserPrincipalName $UserPrincipalName -UserId $UserObj.id -TenantFilter $UserObj.tenantFilter -RemoveLicenses $RemoveLicenses -AddLicenses $licenses -Headers $Headers -APIName $APIName
                         $Results.Add($licResults)
                     }
 
@@ -167,7 +184,7 @@ function Invoke-EditUser {
     if ($AddToGroups) {
         $AddToGroups | ForEach-Object {
 
-            $GroupType = $_.addedFields.calculatedGroupType
+            $GroupType = $_.addedFields.groupType
             $GroupID = $_.value
             $GroupName = $_.label
             Write-Host "About to add $($UserObj.userPrincipalName) to $GroupName. Group ID is: $GroupID and type is: $GroupType"
@@ -199,7 +216,7 @@ function Invoke-EditUser {
     if ($RemoveFromGroups) {
         $RemoveFromGroups | ForEach-Object {
 
-            $GroupType = $_.addedFields.calculatedGroupType
+            $GroupType = $_.addedFields.groupType
             $GroupID = $_.value
             $GroupName = $_.label
             Write-Host "About to remove $($UserObj.userPrincipalName) from $GroupName. Group ID is: $GroupID and type is: $GroupType"
@@ -234,8 +251,7 @@ function Invoke-EditUser {
         $Results.Add($SponsorResult)
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = [HttpStatusCode]::OK
             Body       = @{'Results' = @($Results) }
         })

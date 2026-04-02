@@ -1,4 +1,3 @@
-using namespace System.Net
 Function Invoke-ListSafeLinksPolicy {
     <#
     .FUNCTIONALITY
@@ -12,7 +11,7 @@ Function Invoke-ListSafeLinksPolicy {
     param($Request, $TriggerMetadata)
     $APIName = $Request.Params.CIPPEndpoint
     $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
     $Tenantfilter = $request.Query.tenantfilter
 
     try {
@@ -180,7 +179,7 @@ Function Invoke-ListSafeLinksPolicy {
         $BuiltInOnlyConfigs = ($SortedOutput | Where-Object { $_.ConfigurationStatus -like "*Built-In Rule Only*" }).Count
 
         if ($PolicyOnlyConfigs -gt 0 -or $RuleOnlyConfigs -gt 0) {
-            Write-LogMessage -headers $Headers -API $APIName -message "Found $($PolicyOnlyConfigs + $RuleOnlyConfigs) orphaned SafeLinks configurations that may need attention" -Sev 'Warning'
+            Write-LogMessage -headers $Headers -API $APIName -message "Found $($PolicyOnlyConfigs + $RuleOnlyConfigs) orphaned SafeLinks configurations that may need attention" -sev 'Warn'
         }
 
         $StatusCode = [HttpStatusCode]::OK
@@ -193,8 +192,7 @@ Function Invoke-ListSafeLinksPolicy {
         $FinalOutput = $ErrorMessage
     }
 
-    # Associate values to output bindings by calling 'Push-OutputBinding'.
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = $FinalOutput
         })

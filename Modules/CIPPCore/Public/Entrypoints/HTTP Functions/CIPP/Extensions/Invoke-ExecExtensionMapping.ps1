@@ -1,5 +1,3 @@
-using namespace System.Net
-
 Function Invoke-ExecExtensionMapping {
   <#
     .FUNCTIONALITY
@@ -12,7 +10,7 @@ Function Invoke-ExecExtensionMapping {
 
   $APIName = $Request.Params.CIPPEndpoint
   $Headers = $Request.Headers
-  Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
+
 
   $Table = Get-CIPPTable -TableName CippMapping
 
@@ -102,7 +100,7 @@ Function Invoke-ExecExtensionMapping {
             Batch            = @($Batch)
           }
           #Write-Host ($InputObject | ConvertTo-Json)
-          $InstanceId = Start-NewOrchestration -FunctionName 'CIPPOrchestrator' -InputObject ($InputObject | ConvertTo-Json -Depth 5 -Compress)
+          $InstanceId = Start-CIPPOrchestrator -InputObject $InputObject
           Write-Host "Started permissions orchestration with ID = '$InstanceId'"
           $Result = 'AutoMapping Request has been queued. Exact name matches will appear first and matches on device names and serials will take longer. Please check the CIPP Logbook and refresh the page once complete.'
         }
@@ -118,8 +116,7 @@ Function Invoke-ExecExtensionMapping {
     $StatusCode = [HttpStatusCode]::InternalServerError
   }
 
-  # Associate values to output bindings by calling 'Push-OutputBinding'.
-  Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+  return ([HttpResponseContext]@{
       StatusCode = $StatusCode
       Body       = $Result
     })

@@ -1,5 +1,3 @@
-using namespace System.Net
-
 function Invoke-ExecIncidentsList {
     <#
     .FUNCTIONALITY
@@ -9,18 +7,27 @@ function Invoke-ExecIncidentsList {
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
-
-    $APIName = $Request.Params.CIPPEndpoint
-    $Headers = $Request.Headers
-    Write-LogMessage -headers $Headers -API $APIName -message 'Accessed this API' -Sev 'Debug'
-
     # Interact with query parameters or the body of the request.
     $TenantFilter = $Request.Query.tenantFilter
+    $StartDate = $Request.Query.StartDate   # YYYYMMDD or null
+    $EndDate   = $Request.Query.EndDate     # YYYYMMDD or null
+
+    # Build OData $filter parts for Graph API (single-tenant path)
+    $GraphFilterParts = [System.Collections.Generic.List[string]]::new()
+    if ($StartDate) {
+        $GraphFilterParts.Add("createdDateTime ge $([datetime]::ParseExact($StartDate,'yyyyMMdd',$null).ToString('yyyy-MM-ddT00:00:00Z'))")
+    }
+    if ($EndDate) {
+        $GraphFilterParts.Add("createdDateTime le $([datetime]::ParseExact($EndDate,'yyyyMMdd',$null).ToString('yyyy-MM-ddT23:59:59Z'))")
+    }
+    $GraphODataFilter = if ($GraphFilterParts.Count -gt 0) { '$filter=' + ($GraphFilterParts -join ' and ') } else { $null }
 
     try {
         $GraphRequest = if ($TenantFilter -ne 'AllTenants') {
             # Single tenant functionality
-            $Incidents = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/security/incidents' -tenantid $TenantFilter -AsApp $true
+            $IncidentsUri = 'https://graph.microsoft.com/beta/security/incidents'
+            if ($GraphODataFilter) { $IncidentsUri = "$IncidentsUri`?$GraphODataFilter" }
+            $Incidents = New-GraphGetRequest -uri $IncidentsUri -tenantid $TenantFilter -AsApp $true
 
             foreach ($incident in $Incidents) {
                 [PSCustomObject]@{
@@ -36,7 +43,7 @@ function Invoke-ExecIncidentsList {
                     Classification = $incident.classification
                     Determination  = $incident.determination
                     Severity       = $incident.severity
-                    Tags           = ($IncidentObj.tags -join ', ')
+                    Tags           = ($incident.tags -join ', ')
                     Comments       = $incident.comments
                 }
             }
@@ -74,7 +81,7 @@ function Invoke-ExecIncidentsList {
                     }
                     SkipLog          = $true
                 }
-                Start-NewOrchestration -FunctionName 'CIPPOrchestrator' -InputObject ($InputObject | ConvertTo-Json -Depth 5 -Compress) | Out-Null
+                Start-CIPPOrchestrator -InputObject $InputObject | Out-Null
             } else {
                 $Metadata = [PSCustomObject]@{
                     QueueId = $RunningQueue.RowKey ?? $null
@@ -82,6 +89,10 @@ function Invoke-ExecIncidentsList {
                 $Incidents = $Rows
                 foreach ($incident in $Incidents) {
                     $IncidentObj = $incident.Incident | ConvertFrom-Json
+                    # In-memory date filter for cached AllTenants data
+                    $created = [datetime]::Parse($IncidentObj.createdDateTime)
+                    if ($StartDate -and $created -lt [datetime]::ParseExact($StartDate, 'yyyyMMdd', $null)) { continue }
+                    if ($EndDate   -and $created -ge [datetime]::ParseExact($EndDate,   'yyyyMMdd', $null).AddDays(1)) { continue }
                     [PSCustomObject]@{
                         Tenant         = $incident.Tenant
                         Id             = $IncidentObj.id
@@ -112,7 +123,7 @@ function Invoke-ExecIncidentsList {
             Metadata = $Metadata
         }
     }
-    Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
+    return ([HttpResponseContext]@{
             StatusCode = $StatusCode
             Body       = $Body
         })
