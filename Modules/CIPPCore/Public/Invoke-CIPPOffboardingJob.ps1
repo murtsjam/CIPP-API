@@ -166,6 +166,17 @@ function Invoke-CIPPOffboardingJob {
                 }
             }
             @{
+                Condition  = { $Options.DisableOneDriveSharing -eq $true }
+                Cmdlet     = 'Set-CIPPOneDriveSharing'
+                Parameters = @{
+                    TenantFilter      = $TenantFilter
+                    UserId            = $Username
+                    SharingCapability = 'Disabled'
+                    APIName           = $APIName
+                    Headers           = $Headers
+                }
+            }
+            @{
                 Condition  = { $Options.AccessNoAutomap.Count -gt 0 }
                 Cmdlet     = 'Set-CIPPMailboxAccess'
                 Parameters = @{
@@ -295,8 +306,9 @@ function Invoke-CIPPOffboardingJob {
         }
 
         if ($Batch.Count -eq 0) {
-            Write-LogMessage -API $APIName -tenant $TenantFilter -message "No offboarding tasks selected for user $Username" -sev Warning
-            return "No offboarding tasks were selected for $Username"
+            $NoTasksMessage = "No offboarding tasks were selected for $Username. The offboarding job was not executed - check that at least one action was enabled."
+            Write-LogMessage -API $APIName -tenant $TenantFilter -message $NoTasksMessage -sev Error
+            throw $NoTasksMessage
         }
 
         Write-Information "Built batch of $($Batch.Count) offboarding tasks for $Username"

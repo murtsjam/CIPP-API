@@ -215,6 +215,11 @@
     "description": "Exchange Online quarantine policy"
   },
   {
+    "type": "ExoGlobalQuarantinePolicy",
+    "friendlyName": "Exchange Global Quarantine Policy",
+    "description": "Exchange Online tenant-wide Global Quarantine policy (end-user notification settings)"
+  },
+  {
     "type": "ExoRemoteDomain",
     "friendlyName": "Exchange Remote Domain",
     "description": "Exchange Online remote domain configuration"
@@ -240,9 +245,24 @@
     "description": "Exchange Online tenant allow/block list"
   },
   {
+    "type": "ExoInboundConnector",
+    "friendlyName": "Exchange Inbound Connectors",
+    "description": "Exchange Online inbound connectors (includes enhanced filtering settings)"
+  },
+  {
+    "type": "ExoProtectionAlert",
+    "friendlyName": "Exchange Protection Alerts",
+    "description": "Microsoft 365 protection alert policies (Security & Compliance endpoint)"
+  },
+  {
     "type": "Mailboxes",
     "friendlyName": "Mailboxes",
     "description": "All Exchange Online mailboxes"
+  },
+  {
+    "type": "HVEAccounts",
+    "friendlyName": "HVE Accounts",
+    "description": "High Volume Email accounts"
   },
   {
     "type": "CASMailboxes",
@@ -358,5 +378,10 @@
     "type": "CopilotUserCountTrend",
     "friendlyName": "Copilot User Count Trend",
     "description": "Daily Copilot active user count trend (7-day period)"
+  },
+  {
+    "type": "ExoTransportConfig",
+    "friendlyName": "Exchange Transport Config",
+    "description": "Exchange Online transport configuration including SMTP authentication settings"
   }
 ]

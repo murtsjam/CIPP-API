@@ -21,7 +21,7 @@ function Push-CIPPStandard {
         $API = "$($Standard)_$($Item.TemplateId)"
     }
 
-    $Rerun = Test-CIPPRerun -Type Standard -Tenant $Tenant -API $API
+    $Rerun = Test-CIPPRerun -Type Standard -Tenant $Tenant -API $API -BaseTime ([int64]$Item.QueuedTime)
     if ($Rerun) {
         Write-Information 'Detected rerun. Exiting cleanly'
         return
@@ -40,12 +40,18 @@ function Push-CIPPStandard {
         $StandardInfo.ConditionalAccessTemplateId = $Item.Settings.TemplateList.value
     }
 
-    # Initialize AsyncLocal storage for thread-safe per-invocation context
-    # Uses $global: so Write-LogMessage (CIPPCore module) can read it across module boundaries
-    if (-not $global:CippStandardInfoStorage) {
-        $global:CippStandardInfoStorage = [System.Threading.AsyncLocal[object]]::new()
+    if (-not (Get-Command -Name $FunctionName -Module CIPPStandards -ErrorAction SilentlyContinue)) {
+        Write-LogMessage -tenant $Tenant -message "The standard $Standard was not found. This may have been deprecated or replaced with a new standard." -sev 'Warning' -API 'Standards'
+        Write-Warning "Function $FunctionName not found"
+        return
     }
-    $global:CippStandardInfoStorage.Value = $StandardInfo
+
+    # Store standard info in CIPPCore module-scoped AsyncLocal storage so Write-LogMessage and
+    # Set-CIPPStandardsCompareField can read it - global vars are unreliable in Azure Functions
+    Set-CippStandardInfoContext -StandardInfo $StandardInfo
+
+    # Store action source + template id for outbound User-Agent attribution
+    Set-CippUserAgentContext -Source 'standard' -TemplateId $Item.TemplateId
 
     # ---- Standard execution telemetry ----
     $runId = [guid]::NewGuid().ToString()
@@ -125,8 +131,6 @@ function Push-CIPPStandard {
                 Error        = $err
             } | ConvertTo-Json -Compress)
 
-        if ($global:CippStandardInfoStorage) {
-            $global:CippStandardInfoStorage.Value = $null
-        }
+        Set-CippStandardInfoContext -StandardInfo $null
     }
 }

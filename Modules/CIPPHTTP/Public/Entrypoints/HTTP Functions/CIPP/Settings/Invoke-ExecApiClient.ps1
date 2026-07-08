@@ -30,6 +30,33 @@ function Invoke-ExecApiClient {
         }
         'AddUpdate' {
             $Results = [System.Collections.Generic.List[object]]::new()
+
+            # Authorize the role assignment BEFORE any side effects (app registration /
+            # secret creation). A caller may only assign a role whose effective
+            # permissions are a subset of their own, and may only modify an existing
+            # client whose current role is likewise within their grant. This blocks
+            # privilege escalation via the ApiClients table (e.g. editor -> superadmin).
+            $RequestedRole = [string]$Request.Body.Role.value
+            $RolesToAuthorize = [System.Collections.Generic.List[string]]::new()
+            $RolesToAuthorize.Add($RequestedRole)
+            $ExistingClientForAuth = $null
+            $AuthClientId = $Request.Body.ClientId.value ?? $Request.Body.ClientId
+            if ($AuthClientId) {
+                $ExistingClientForAuth = Get-CIPPAzDataTableEntity @Table -Filter "RowKey eq '$($AuthClientId)'"
+                if ($ExistingClientForAuth) {
+                    $RolesToAuthorize.Add([string]$ExistingClientForAuth.Role)
+                }
+            }
+            $RoleGrant = Test-CippApiClientRoleGrant -Request $Request -Role $RolesToAuthorize
+            if (-not $RoleGrant.Allowed) {
+                Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message "Blocked API client role assignment: $($RoleGrant.Message)" -Sev 'Warning'
+                $Body = @(@{
+                        resultText = $RoleGrant.Message
+                        state      = 'error'
+                    })
+                break
+            }
+
             if ($Request.Body.ClientId -or $Request.Body.AppName) {
                 $ClientId = $Request.Body.ClientId.value ?? $Request.Body.ClientId
                 $AddUpdateSuccess = $false
@@ -103,6 +130,7 @@ function Invoke-ExecApiClient {
                     $Client.Role = [string]$Request.Body.Role.value
                     $Client.IPRange = "$(@($IpRange) | ConvertTo-Json -Compress)"
                     $Client.Enabled = $Request.Body.Enabled ?? $false
+                    $Client | Add-Member -NotePropertyName 'MCPAllowed' -NotePropertyValue ([bool]($Request.Body.MCPAllowed ?? $false)) -Force
                     Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message "Updated API client $($Request.Body.ClientId)" -Sev 'Info'
                     if ($APIConfig.ApplicationSecret) {
                         $Results.Add(@{
@@ -121,6 +149,7 @@ function Invoke-ExecApiClient {
                         'Role'         = [string]$Request.Body.Role.value
                         'IPRange'      = "$(@($IpRange) | ConvertTo-Json -Compress)"
                         'Enabled'      = $Request.Body.Enabled ?? $false
+                        'MCPAllowed'   = [bool]($Request.Body.MCPAllowed ?? $false)
                     }
                     $Results.Add(@{
                             resultText = "API Client created with the name '$($Client.AppName)'. Use the Copy to Clipboard button to retrieve the secret."
@@ -130,6 +159,20 @@ function Invoke-ExecApiClient {
                 }
 
                 Add-CIPPAzDataTableEntity @Table -Entity $Client -Force | Out-Null
+
+                # When this client is MCP-enabled, configure its app registration as the MCP OAuth
+                # resource (host identifier URIs + v2 tokens) so the Claude connector flow can resolve it.
+                if ([bool]($Request.Body.MCPAllowed ?? $false)) {
+                    try {
+                        $null = Set-CIPPMCPClientApp -AppId $ClientId -Headers $Request.Headers
+                        $Results.Add('MCP resource URIs and v2 tokens configured on the app registration. Run Save to Azure to apply the changes.')
+                    } catch {
+                        $Results.Add(@{
+                                resultText = "Client saved, but MCP app configuration failed: $($_.Exception.Message)"
+                                state      = 'warning'
+                            })
+                    }
+                }
             }
 
             if ($IPValidationErrors.Count -gt 0) {
@@ -150,19 +193,9 @@ function Invoke-ExecApiClient {
             }
         }
         'GetAzureConfiguration' {
-            if ($env:WEBSITE_RESOURCE_GROUP) {
-                $RGName = $env:WEBSITE_RESOURCE_GROUP
-            } else {
-                $Owner = $env:WEBSITE_OWNER_NAME
-                if ($env:WEBSITE_SKU -ne 'FlexConsumption' -and $Owner -match '^(?<SubscriptionId>[^+]+)\+(?<RGName>[^-]+(?:-[^-]+)*?)(?:-[^-]+webspace(?:-Linux)?)?$') {
-                    $RGName = $Matches.RGName
-                } else {
-                    Write-Information "Could not determine resource group from environment variables. Owner: $Owner"
-                    $RGName = $null
-                }
-            }
             $FunctionAppName = $env:WEBSITE_SITE_NAME
             try {
+                $RGName = Get-CIPPFunctionAppResourceGroup -SiteName $FunctionAppName
                 $APIClients = Get-CippApiAuth -RGName $RGName -FunctionAppName $FunctionAppName
                 $Results = $ApiClients
             } catch {
@@ -177,22 +210,24 @@ function Invoke-ExecApiClient {
         }
         'SaveToAzure' {
             $TenantId = $env:TenantID
-            if ($env:WEBSITE_RESOURCE_GROUP) {
-                $RGName = $env:WEBSITE_RESOURCE_GROUP
-            } else {
-                $Owner = $env:WEBSITE_OWNER_NAME
-                if ($env:WEBSITE_SKU -ne 'FlexConsumption' -and $Owner -match '^(?<SubscriptionId>[^+]+)\+(?<RGName>[^-]+(?:-[^-]+)*?)(?:-[^-]+webspace(?:-Linux)?)?$') {
-                    $RGName = $Matches.RGName
-                } else {
-                    Write-Information "Could not determine resource group from environment variables. Owner: $Owner"
-                    $RGName = $null
-                }
-            }
             $FunctionAppName = $env:WEBSITE_SITE_NAME
             $AllClients = Get-CIPPAzDataTableEntity @Table -Filter 'Enabled eq true' | Where-Object { ![string]::IsNullOrEmpty($_.RowKey) }
             $ClientIds = $AllClients.RowKey
+            # MCPAllowed can round-trip from table storage as a bool or a string; compare on string form.
+            $McpClientIds = @($AllClients | Where-Object { "$($_.MCPAllowed)" -eq 'True' } | ForEach-Object { $_.RowKey })
+            Write-Information "[ExecApiClient] MCP clients resolved for audiences/scope: $($McpClientIds -join ', ')"
             try {
-                Set-CippApiAuth -RGName $RGName -FunctionAppName $FunctionAppName -TenantId $TenantId -ClientIds $ClientIds
+                $RGName = Get-CIPPFunctionAppResourceGroup -SiteName $FunctionAppName
+                Set-CippApiAuth -RGName $RGName -FunctionAppName $FunctionAppName -TenantId $TenantId -ClientIds $ClientIds -McpClientIds $McpClientIds
+
+                # Advertise the MCP resource scope via App Service PRM so the Claude connector requests
+                # a scope that matches the resource app (clears AADSTS9010010). Cleared when no MCP clients.
+                if ($McpClientIds.Count -gt 0 -and $env:WEBSITE_HOSTNAME) {
+                    $null = Update-CIPPAzFunctionAppSetting -Name $FunctionAppName -ResourceGroupName $RGName -AppSetting @{ 'WEBSITE_AUTH_PRM_DEFAULT_WITH_SCOPES' = "https://$($env:WEBSITE_HOSTNAME)/user_impersonation" }
+                } else {
+                    $null = Update-CIPPAzFunctionAppSetting -Name $FunctionAppName -ResourceGroupName $RGName -AppSetting @{} -RemoveKeys @('WEBSITE_AUTH_PRM_DEFAULT_WITH_SCOPES')
+                }
+
                 $Body = @{ Results = 'API clients saved to Azure' }
                 Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message 'Saved API clients to Azure' -Sev 'Info'
             } catch {
@@ -211,6 +246,18 @@ function Invoke-ExecApiClient {
                     state      = 'error'
                 }
             } else {
+                # Block resetting the secret of a client whose role outranks the caller;
+                # otherwise an editor could harvest a working superadmin secret.
+                $RoleGrant = Test-CippApiClientRoleGrant -Request $Request -Role ([string]$Client.Role)
+                if (-not $RoleGrant.Allowed) {
+                    Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message "Blocked API client secret reset for $($Request.Body.ClientId): $($RoleGrant.Message)" -Sev 'Warning'
+                    $Results = @{
+                        resultText = $RoleGrant.Message
+                        state      = 'error'
+                    }
+                    $Body = @($Results)
+                    break
+                }
                 $ApiConfig = New-CIPPAPIConfig -ResetSecret -AppId $Request.Body.ClientId -Headers $Request.Headers
 
                 if ($ApiConfig.ApplicationSecret) {
@@ -228,10 +275,54 @@ function Invoke-ExecApiClient {
             }
             $Body = @($Results)
         }
+        'RepairUri' {
+            $Client = Get-CIPPAzDataTableEntity @Table -Filter "RowKey eq '$($Request.Body.ClientId)'"
+            if (!$Client) {
+                $Results = @{
+                    resultText = 'API client not found'
+                    state      = 'error'
+                }
+            } else {
+                try {
+                    $RepairResult = Repair-CippApiIdentifierUri -AppId $Request.Body.ClientId
+
+                    if ($RepairResult.Fixed) {
+                        Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message "Repaired identifier URI for $($Client.AppName) $($RepairResult.Message)" -Sev 'Info'
+                        $Results = @{
+                            resultText = "Identifier URI fixed for $($Client.AppName). $($RepairResult.Message)"
+                            state      = 'success'
+                        }
+                    } else {
+                        $Results = @{
+                            resultText = "Identifier URI already correct for $($Client.AppName). $($RepairResult.Message)"
+                            state      = 'info'
+                        }
+                    }
+                } catch {
+                    $ErrorMessage = Get-CippException -Exception $_
+                    Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message "Failed to repair identifier URI for $($Client.AppName) $($ErrorMessage.NormalizedError)" -Sev 'Error' -LogData $ErrorMessage
+                    $Results = @{
+                        resultText = "Failed to repair identifier URI for $($Client.AppName) $($ErrorMessage.NormalizedError)"
+                        state      = 'error'
+                    }
+                }
+            }
+            $Body = @($Results)
+        }
         'Delete' {
             try {
                 if ($Request.Body.ClientId) {
                     $ClientId = $Request.Body.ClientId.value ?? $Request.Body.ClientId
+                    # Block deleting a client whose role outranks the caller (tamper/DoS).
+                    $ExistingClientForAuth = Get-CIPPAzDataTableEntity @Table -Filter "RowKey eq '$($ClientId)'"
+                    if ($ExistingClientForAuth) {
+                        $RoleGrant = Test-CippApiClientRoleGrant -Request $Request -Role ([string]$ExistingClientForAuth.Role)
+                        if (-not $RoleGrant.Allowed) {
+                            Write-LogMessage -headers $Request.Headers -API 'ExecApiClient' -message "Blocked API client deletion for $($ClientId): $($RoleGrant.Message)" -Sev 'Warning'
+                            $Body = @{ Results = $RoleGrant.Message }
+                            break
+                        }
+                    }
                     if ($Request.Body.RemoveAppReg -eq $true) {
                         Write-Information "Deleting API Client: $ClientId from Entra"
                         $App = New-GraphGetRequest -uri "https://graph.microsoft.com/v1.0/applications?`$filter=appId eq '$($ClientId)'&`$select=id,appId,web" -NoAuthCheck $true -asapp $true

@@ -17,21 +17,34 @@ function Set-CIPPSAMAdminRoles {
 
     $ActionLogs = [System.Collections.Generic.List[object]]::new()
 
+    # Default roles always assigned for all tenants
+    $DefaultRoles = @(
+        [PSCustomObject]@{ value = '17315797-102d-40b4-93e0-432062caca18'; label = 'Compliance Administrator' }
+    )
+
     $SAMRolesTable = Get-CIPPTable -tablename 'SAMRoles'
     $Roles = Get-CIPPAzDataTableEntity @SAMRolesTable
 
     try {
-        $SAMRoles = $Roles.Roles | ConvertFrom-Json -ErrorAction Stop
+        $SAMRoles = @($Roles.Roles | ConvertFrom-Json -ErrorAction Stop)
         $Tenants = $Roles.Tenants | ConvertFrom-Json -ErrorAction Stop
         if ($Tenants.value) {
             $Tenants = $Tenants.value
         }
     } catch {
-        $ActionLogs.Add('CIPP-SAM roles not configured')
-        return $ActionLogs
+        $SAMRoles = @()
+        $Tenants = @()
     }
 
-    if (($SAMRoles | Measure-Object).count -gt 0 -and $Tenants -contains $TenantFilter -or $Tenants -contains 'AllTenants') {
+    # Merge default roles with user-configured roles, avoiding duplicates
+    $ExistingValues = @($SAMRoles | ForEach-Object { $_.value })
+    foreach ($DefaultRole in $DefaultRoles) {
+        if ($DefaultRole.value -notin $ExistingValues) {
+            $SAMRoles = @($SAMRoles) + @($DefaultRole)
+        }
+    }
+
+    if (($SAMRoles | Measure-Object).Count -gt 0 -and ($Tenants -contains $TenantFilter -or $Tenants -contains 'AllTenants' -or ($Tenants | Measure-Object).Count -eq 0)) {
         $InitialRequests = @(
             [PSCustomObject]@{
                 id     = 'memberOf'
@@ -69,13 +82,25 @@ function Set-CIPPSAMAdminRoles {
                 $null = New-ExoRequest -cmdlet 'New-ServicePrincipal' -cmdParams @{AppId = $env:ApplicationID; ObjectId = $id; DisplayName = 'CIPP-SAM' } -Compliance -tenantid $TenantFilter -useSystemMailbox $true -AsApp
                 $ActionLogs.Add('Added Service Principal to Compliance Center')
             } catch {
-                $ActionLogs.Add('Service Principal already added to Compliance Center')
+                $SpError = $_.Exception.Message
+                if ($SpError -match 'already exist') {
+                    $ActionLogs.Add('Service Principal already added to Compliance Center')
+                } else {
+                    $ActionLogs.Add("Failed to add Service Principal to Compliance Center: $SpError")
+                    $HasFailures = $true
+                }
             }
             try {
                 $null = New-ExoRequest -cmdlet 'New-ServicePrincipal' -cmdParams @{AppId = $env:ApplicationID; ObjectId = $id; DisplayName = 'CIPP-SAM' } -tenantid $TenantFilter -useSystemMailbox $true -AsApp
                 $ActionLogs.Add('Added Service Principal to Exchange Online')
             } catch {
-                $ActionLogs.Add('Service Principal already added to Exchange Online')
+                $SpError = $_.Exception.Message
+                if ($SpError -match 'already exist') {
+                    $ActionLogs.Add('Service Principal already added to Exchange Online')
+                } else {
+                    $ActionLogs.Add("Failed to add Service Principal to Exchange Online: $SpError")
+                    $HasFailures = $true
+                }
             }
 
             Write-Verbose ($Requests | ConvertTo-Json -Depth 5)
@@ -83,8 +108,10 @@ function Set-CIPPSAMAdminRoles {
             $Results | ForEach-Object {
                 if ($_.status -eq 204) {
                     $ActionLogs.Add("Added service principal to directory role $($_.id)")
+                } elseif ($_.status -eq 404) {
+                    $ActionLogs.Add("Directory role $($_.id) does not exist in tenant, skipping")
                 } else {
-                    $ActionLogs.Add("Failed to add service principal to directoryRole $($_.id)")
+                    $ActionLogs.Add("Failed to add service principal to directoryRole $($_.id):  $($_ | ConvertTo-Json -Depth 5)")
                     Write-Verbose ($_ | ConvertTo-Json -Depth 5)
                     $HasFailures = $true
                 }

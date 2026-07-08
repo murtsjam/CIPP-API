@@ -52,7 +52,7 @@ function Invoke-AddCustomScript {
                 }
                 'SetResultMode' {
                     $RequestedMode = $Request.Body.ResultMode
-                    $ValidResultModes = @('Auto', 'AlwaysPass', 'AlwaysInfo')
+                    $ValidResultModes = @('Auto', 'AlwaysPass', 'AlwaysInfo', 'AlwaysInvestigate')
                     if ([string]::IsNullOrWhiteSpace($RequestedMode) -or $RequestedMode -notin $ValidResultModes) {
                         throw "ResultMode must be one of: $($ValidResultModes -join ', ')"
                     }
@@ -115,6 +115,7 @@ function Invoke-AddCustomScript {
             $UserImpact = $Request.Body.UserImpact
             $Enabled = $Request.Body.Enabled
             $AlertOnFailure = $Request.Body.AlertOnFailure
+            $AlertStatuses = $Request.Body.AlertStatuses
             $ReturnType = $Request.Body.ReturnType
             $MarkdownTemplate = $Request.Body.MarkdownTemplate
             $ResultSchema = $Request.Body.ResultSchema
@@ -149,7 +150,7 @@ function Invoke-AddCustomScript {
                 throw "ReturnType must be one of: $($ValidReturnTypes -join ', ')"
             }
 
-            $ValidResultModes = @('Auto', 'AlwaysPass', 'AlwaysInfo')
+            $ValidResultModes = @('Auto', 'AlwaysPass', 'AlwaysInfo', 'AlwaysInvestigate')
             if ($ResultMode -notin $ValidResultModes) {
                 throw "ResultMode must be one of: $($ValidResultModes -join ', ')"
             }
@@ -222,6 +223,7 @@ function Invoke-AddCustomScript {
                 UserImpact           = $UserImpact
                 Enabled              = $Enabled
                 AlertOnFailure       = $AlertOnFailure
+                AlertStatuses        = $AlertStatuses
                 ReturnType           = $ReturnType
                 MarkdownTemplate     = $MarkdownTemplate
                 ResultSchema         = $ResultSchema

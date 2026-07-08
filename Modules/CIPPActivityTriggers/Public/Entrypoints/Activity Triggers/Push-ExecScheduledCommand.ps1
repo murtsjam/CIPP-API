@@ -11,10 +11,12 @@ function Push-ExecScheduledCommand {
     $OrchestratorBasedCommands = @('Invoke-CIPPOffboardingJob')
 
     # Initialize AsyncLocal storage for thread-safe per-invocation context
-    if (-not $global:CippScheduledTaskIdStorage) {
-        $global:CippScheduledTaskIdStorage = [System.Threading.AsyncLocal[string]]::new()
-    }
-    $global:CippScheduledTaskIdStorage.Value = $Item.TaskInfo.RowKey
+    # Store task id in CIPPCore module-scoped AsyncLocal storage so Write-LogMessage can read it -
+    # global vars are unreliable in Azure Functions
+    Set-CippScheduledTaskContext -TaskId $Item.TaskInfo.RowKey
+
+    # Store action source + creating user identity (from stored headers) for outbound User-Agent attribution
+    Set-CippUserAgentContext -Headers $Item.Parameters.Headers -Source 'scheduled-task' -TaskId $Item.TaskInfo.RowKey
 
     $Table = Get-CippTable -tablename 'ScheduledTasks'
     $task = $Item.TaskInfo
@@ -161,6 +163,39 @@ function Push-ExecScheduledCommand {
         }
     }
 
+    $Command = Get-Command -Name $Item.Command -ErrorAction SilentlyContinue
+    if ($null -eq $Command) {
+        $Results = "Task Failed: The command $($Item.Command) does not exist."
+        $State = 'Failed'
+        if (!$IsMultiTenantExecution) {
+            Update-AzDataTableEntity -Force @Table -Entity @{
+                PartitionKey = $task.PartitionKey
+                RowKey       = $task.RowKey
+                Results      = "$Results"
+                TaskState    = $State
+            }
+        }
+
+        Write-LogMessage -API 'Scheduler_UserTasks' -tenant $Tenant -tenantid $TenantInfo.customerId -message "Failed to execute task $($task.Name): The command $($Item.Command) does not exist." -sev Error
+        Remove-Variable -Name ScheduledTaskId -Scope Script -ErrorAction SilentlyContinue
+        return
+    }
+
+    if ($Command.Module -notin @('CIPPCore', 'CIPPAlerts', 'CIPPStandards', 'CIPPTests', 'CIPPDB', 'CippExtensions', 'CIPPActivityTriggers')) {
+        $State = 'Failed'
+        Write-LogMessage -headers $Headers -API 'ScheduledTask' -message "Blocked attempt to schedule command from unauthorized module: $($Command.ModuleName)\$($Item.Command)" -Sev 'Warning'
+        $Results = "Task blocked: The command '$($Item.Command)' is not permitted to run as a scheduled task."
+        if (!$IsMultiTenantExecution) {
+            Update-AzDataTableEntity -Force @Table -Entity @{
+                PartitionKey = $task.PartitionKey
+                RowKey       = $task.RowKey
+                Results      = "$Results"
+                TaskState    = $State
+            }
+        }
+        Remove-Variable -Name ScheduledTaskId -Scope Script -ErrorAction SilentlyContinue
+        return
+    }
     if ($Item.Command -in (Get-CIPPSchedulerBlockedCommands)) {
         $Results = "Task blocked: '$($Item.Command)' is not permitted to run as a scheduled task."
         $State = 'Failed'
@@ -177,23 +212,7 @@ function Push-ExecScheduledCommand {
         return
     }
 
-    $Function = Get-Command -Name $Item.Command
-    if ($null -eq $Function) {
-        $Results = "Task Failed: The command $($Item.Command) does not exist."
-        $State = 'Failed'
-        if (!$IsMultiTenantExecution) {
-            Update-AzDataTableEntity -Force @Table -Entity @{
-                PartitionKey = $task.PartitionKey
-                RowKey       = $task.RowKey
-                Results      = "$Results"
-                TaskState    = $State
-            }
-        }
-
-        Write-LogMessage -API 'Scheduler_UserTasks' -tenant $Tenant -tenantid $TenantInfo.customerId -message "Failed to execute task $($task.Name): The command $($Item.Command) does not exist." -sev Error
-        Remove-Variable -Name ScheduledTaskId -Scope Script -ErrorAction SilentlyContinue
-        return
-    }
+    $Function = $Command
 
     try {
         $PossibleParams = $Function.Parameters.Keys

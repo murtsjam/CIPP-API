@@ -7,8 +7,8 @@ function Invoke-CIPPStandardEnableCustomerLockbox {
     .SYNOPSIS
         (Label) Enable Customer Lockbox
     .DESCRIPTION
-        (Helptext) **Requires Entra ID P2.** Enables Customer Lockbox that offers an approval process for Microsoft support to access organization data
-        (DocsDescription) \*\*Requires Entra ID P2.\*\* Customer Lockbox ensures that Microsoft can't access your content to do service operations without your explicit approval. Customer Lockbox ensures only authorized requests allow access to your organizations data.
+        (Helptext) **Requires CustomerLockbox (E5, E7, A5, Purview Addon for BP, EDU or FL)** Enables Customer Lockbox that offers an approval process for Microsoft support to access organization data
+        (DocsDescription) \*\*Requires CustomerLockbox (E5, E7, A5, Purview Addon for BP, EDU or FL)\*\* Customer Lockbox ensures that Microsoft can't access your content to do service operations without your explicit approval. Customer Lockbox ensures only authorized requests allow access to your organizations data.
     .NOTES
         CAT
             Global Standards
@@ -31,7 +31,7 @@ function Invoke-CIPPStandardEnableCustomerLockbox {
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
+        https://docs.cipp.app/user-documentation/tenant/standards/alignment/templates/available-standards
     #>
 
     param($Tenant, $Settings)
