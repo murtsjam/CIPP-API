@@ -5,9 +5,7 @@
     "Description": "The Best Practice Analyser has been deprecated and will be removed in a future release.",
     "Enabled": false,
     "AllowUserToggle": true,
-    "Timers": [
-      "80070b4f-95ed-4e5f-be4c-9e339306d4aa"
-    ],
+    "Timers": ["80070b4f-95ed-4e5f-be4c-9e339306d4aa"],
     "Endpoints": [
       "BestPracticeAnalyser_List",
       "ExecBPA",
@@ -25,7 +23,7 @@
   {
     "Id": "SuperAdminNG",
     "Name": "Super Admin",
-    "Description": "Additional super admin pages for CIPP instances (CIPP Users, SSO, Container management).",
+    "Description": "Additional super admin pages for CIPP instances (CIPP Users, Container Management, Custom Domains, Container Logs, Worker Health).",
     "Enabled": false,
     "AllowUserToggle": false,
     "Timers": [],
@@ -33,39 +31,16 @@
       "ExecCIPPUsers",
       "ListCIPPUsers",
       "ExecContainerManagement",
+      "ExecAppServiceDomains",
       "ListContainerLogs",
       "ListWorkerHealth"
     ],
     "Pages": [
-      "/cipp/advanced/super-admin/cipp-users",
-      "/cipp/advanced/super-admin/container",
-      "/cipp/advanced/container-logs",
-      "/cipp/advanced/worker-health"
-    ],
-    "Hidden": true
-  },
-  {
-    "Id": "CopilotAI",
-    "Name": "Copilot & AI",
-    "Description": "Under Development: Microsoft 365 Copilot and AI management pages including settings, usage reports, Agent365 packages, and Shadow AI analysis.",
-    "Enabled": false,
-    "AllowUserToggle": false,
-    "Timers": [],
-    "Endpoints": [
-      "ListCopilotSettings",
-      "ExecCopilotSettings",
-      "ListCopilotUsage",
-      "ListAgent365Packages",
-      "ListAgent365PackageDetail",
-      "ListShadowAI"
-    ],
-    "Pages": [
-      "/copilot/settings",
-      "/copilot/shadow-ai",
-      "/copilot/agent365/packages",
-      "/copilot/reports/copilot-adoption",
-      "/copilot/reports/copilot-usage",
-      "/copilot/reports/copilot-trend"
+      "/cipp/advanced/authentication/cipp-users",
+      "/cipp/advanced/container-management/status",
+      "/cipp/advanced/container-management/custom-domains",
+      "/cipp/advanced/container-management/logs",
+      "/cipp/advanced/container-management/worker-health"
     ],
     "Hidden": true
   },
@@ -76,9 +51,7 @@
     "Enabled": false,
     "AllowUserToggle": true,
     "Timers": [],
-    "Endpoints": [
-      "ExecMcp"
-    ],
+    "Endpoints": ["ExecMcp"],
     "Pages": [],
     "Hidden": false
   },
@@ -89,12 +62,47 @@
     "Enabled": true,
     "AllowUserToggle": false,
     "Timers": [],
-    "Endpoints": [
-      "ExecAppInsightsQuery"
-    ],
-    "Pages": [
-      "/cipp/advanced/diagnostics"
-    ],
+    "Endpoints": ["ExecAppInsightsQuery"],
+    "Pages": ["/cipp/advanced/diagnostics"],
     "Hidden": true
+  },
+  {
+    "Id": "BackendSettings",
+    "Name": "Backend Settings",
+    "Description": "Backend settings page showing Azure resource URLs. Hidden on hosted instances.",
+    "Enabled": true,
+    "AllowUserToggle": false,
+    "Timers": [],
+    "Endpoints": ["ExecBackendURLs"],
+    "Pages": ["/cipp/settings/backend"],
+    "Hidden": true
+  },
+  {
+    "Id": "FunctionOffloading",
+    "Name": "Function Offloading",
+    "Description": "Function offloading configuration page. Hidden in CIPP-NG.",
+    "Enabled": true,
+    "AllowUserToggle": false,
+    "Timers": [],
+    "Endpoints": ["ExecOffloadFunctions"],
+    "Pages": ["/cipp/advanced/super-admin/function-offloading"],
+    "Hidden": true
+  },
+  {
+    "Id": "Baselines",
+    "Name": "Baselines",
+    "Description": "The drift-first baseline engine that replaces classic Standards and Drift. Enables the scheduled baseline run and the Baselines menu, hides the classic Standards and Drift pages, and skips the scheduled classic Standards and Drift runs - the two systems never run side by side.",
+    "Enabled": false,
+    "AllowUserToggle": true,
+    "Timers": ["9f2c7b1e-4a6d-4c3f-8b9a-5e1d2f7c0a44"],
+    "Endpoints": [],
+    "Pages": ["/tenant/baselines"],
+    "HidesPages": [
+      "/tenant/standards/alignment",
+      "/tenant/manage/drift",
+      "/tenant/manage/applied-standards",
+      "/tenant/manage/policies-deployed"
+    ],
+    "Hidden": false
   }
 ]

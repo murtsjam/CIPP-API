@@ -15,6 +15,7 @@ function Invoke-CIPPDBCacheCollection {
         - ConditionalAccess:  CA policies and registration details
         - IdentityProtection: Risky users/SPs, risk detections, PIM
         - Intune:             Managed devices, policies, app protection
+        - Defender:           Defender Vulnerabilities
 
     .PARAMETER CollectionType
         The group of cache functions to execute
@@ -31,7 +32,7 @@ function Invoke-CIPPDBCacheCollection {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Graph', 'ExchangeConfig', 'ExchangeData', 'ConditionalAccess', 'IdentityProtection', 'Intune', 'Compliance', 'CopilotUsage', 'SharePoint', 'Teams')]
+        [ValidateSet('Graph', 'ExchangeConfig', 'ExchangeData', 'ConditionalAccess', 'IdentityProtection', 'Intune', 'Compliance', 'CopilotUsage', 'SharePoint', 'Teams', 'Defender')]
         [string]$CollectionType,
 
         [Parameter(Mandatory = $true)]
@@ -54,6 +55,7 @@ function Invoke-CIPPDBCacheCollection {
             'AdminConsentRequestPolicy'
             'AuthorizationPolicy'
             'AuthenticationMethodsPolicy'
+            'SecurityDefaults'
             'DeviceSettings'
             'DirectoryRecommendations'
             'CrossTenantAccessPolicy'
@@ -68,6 +70,20 @@ function Invoke-CIPPDBCacheCollection {
             'AppRoleAssignments'
             'LicenseOverview'
             'BitlockerKeys'
+            'AdminReportSettings'
+            'PeopleInsights'
+            'Pronouns'
+            'NamePronunciation'
+            'PhotoUpdateSettings'
+            'OrganizationBranding'
+            'HomeRealmDiscoveryPolicy'
+            'MobileDeviceManagementPolicies'
+            'PermissionGrantPolicies'
+            'CopilotAdminSettings'
+            'CopilotPolicySettings'
+            'SelfServicePurchaseProducts'
+            'MoeraDmarc'
+            'DomainAnalyser'
         )
         ExchangeConfig     = @(
             'ExoAntiPhishPolicies'
@@ -91,7 +107,23 @@ function Invoke-CIPPDBCacheCollection {
             'ExoProtectionAlert'
             'OwaMailboxPolicy'
             'ReportSubmissionPolicy'
+            'ReportSubmissionRule'
             'ExoTransportConfig'
+            'ExoHostedConnectionFilterPolicy'
+            'ExoExternalInOutlook'
+            'ExoTeamsProtectionPolicy'
+            'ExoOutboundConnector'
+            'ExoRoleAssignmentPolicy'
+            'ExoHostedContentFilterRule'
+            'ExoGlobalQuarantinePolicy'
+            'ExoOMEConfiguration'
+            'ExoMailboxPlans'
+            'ExoRetentionPolicyTags'
+            'ExoRetentionPolicies'
+            'ExoDynamicDistributionGroup'
+            'ExoMailContacts'
+            'ExoTenantAllowBlockListSpoofItems'
+            'ExoPhishSimConfig'
         )
         ExchangeData       = @(
             'CASMailboxes'
@@ -126,10 +158,20 @@ function Invoke-CIPPDBCacheCollection {
             'DetectedApps'
             'IntuneAppInstallStatus'
             'MDEOnboarding'
+            'AutopilotDeploymentProfiles'
+            'DeviceEnrollmentConfigurations'
+            'IntuneDeviceManagementSettings'
+            'IntuneDataProcessorOnboarding'
+            'IntuneBrandingProfile'
+            'ManagedDeviceCleanupRules'
         )
         Compliance         = @(
             'SensitivityLabels'
             'DlpCompliancePolicies'
+            'ComplianceRetentionPolicies'
+            'ComplianceRetentionRules'
+            'ExoDlpSensitiveInfoTypes'
+            'ExoLabels'
         )
         CopilotUsage       = @(
             'CopilotUsageUserDetail'
@@ -140,7 +182,9 @@ function Invoke-CIPPDBCacheCollection {
         SharePoint         = @(
             'SPOTenant'
             'SPOTenantSyncClientRestriction'
+            'SharePointAdminSettings'
             'SharePointSiteUsage'
+            'SiteActivity'
             'OneDriveUsage'
         )
         Teams              = @(
@@ -149,10 +193,15 @@ function Invoke-CIPPDBCacheCollection {
             'CsExternalAccessPolicy'
             'CsTenantFederationConfiguration'
             'CsTeamsMessagingPolicy'
+            'CsTeamsMessagingConfiguration'
             'CsTeamsAppPermissionPolicy'
             'Teams'
             'TeamsActivity'
             'TeamsVoice'
+            'TeamsResourceAccounts'
+        )
+        Defender           = @(
+            'DefenderCVEs'
         )
     }
 

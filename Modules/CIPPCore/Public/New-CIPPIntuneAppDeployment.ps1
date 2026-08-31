@@ -32,6 +32,8 @@ function New-CIPPIntuneAppDeployment {
         if (-not $PackageId) {
             throw "PackageName/packagename is required for WinGet apps but was not found in the config for '$AppDisplayName'."
         }
+        # Default to system when InstallAsSystem is absent so existing templates keep their behavior
+        $RunAsAccount = if ($null -ne $AppConfig.InstallAsSystem -and -not [bool]$AppConfig.InstallAsSystem) { 'user' } else { 'system' }
         $IntuneBody = [ordered]@{
             '@odata.type'       = '#microsoft.graph.winGetApp'
             'displayName'       = "$AppDisplayName"
@@ -39,7 +41,7 @@ function New-CIPPIntuneAppDeployment {
             'packageIdentifier' = "$PackageId"
             'installExperience' = @{
                 '@odata.type'  = 'microsoft.graph.winGetAppInstallExperience'
-                'runAsAccount' = 'system'
+                'runAsAccount' = $RunAsAccount
             }
         }
     }
@@ -78,6 +80,29 @@ function New-CIPPIntuneAppDeployment {
         }
     }
 
+    # Build IntuneBody from raw config if not pre-built (template/standard path). MSP apps store
+    # only the vendor + params in the template, so build the install command here using the shared
+    # helper, which resolves %CIPP variables% in the params per-tenant.
+    if (-not $IntuneBody -and $AppType -eq 'MSPApp') {
+        $MSPAppName = $AppConfig.MSPAppName ?? $AppConfig.rmmname.value ?? $AppConfig.rmmname
+        if ([string]::IsNullOrWhiteSpace($MSPAppName)) {
+            throw 'MSP app vendor (rmmname) is required for MSP app deployments but was not found in the template config.'
+        }
+        # Ensure the file-loading block below can locate the packaged app files.
+        $AppConfig | Add-Member -NotePropertyName 'MSPAppName' -NotePropertyValue $MSPAppName -Force
+
+        $IntuneBody = Get-Content (Join-Path $env:CIPPRootPath "AddMSPApp\$MSPAppName.app.json") | ConvertFrom-Json
+        $IntuneBody.displayName = $AppConfig.Applicationname ?? $AppConfig.displayName
+
+        $TenantObj = Get-Tenants -TenantFilter $TenantFilter
+        $CommandResult = Get-CIPPMSPAppInstallCommand -RmmName $MSPAppName -Params $AppConfig.params -Tenant $TenantObj -PackageName $AppConfig.PackageName
+        $IntuneBody.installCommandLine = $CommandResult.InstallCommandLine
+        $IntuneBody.UninstallCommandLine = $CommandResult.UninstallCommandLine
+        if ($CommandResult.DetectionScriptContent) {
+            $IntuneBody.detectionRules[0].scriptContent = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($CommandResult.DetectionScriptContent))
+        }
+    }
+
     # Load files based on app type (only for types that need them)
     $Intunexml = $null
     $Infile = $null
@@ -91,8 +116,14 @@ function New-CIPPIntuneAppDeployment {
 
     $BaseUri = 'https://graph.microsoft.com/beta/deviceAppManagement/mobileApps'
 
-    # Check if app already exists (any type with matching display name)
-    $ApplicationList = New-GraphGetRequest -Uri $BaseUri -tenantid $TenantFilter | Where-Object { $_.DisplayName -eq $AppConfig.Applicationname }
+    # Check if app already exists (any type with matching display name). Office is a singleton per
+    # tenant and Graph names it 'Microsoft 365 Apps for Windows 10 and later' regardless of what the
+    # template calls it, so match that one on type instead or it is redeployed on every run.
+    $ApplicationList = if ($AppType -eq 'OfficeApp') {
+        New-GraphGetRequest -Uri $BaseUri -tenantid $TenantFilter | Where-Object { $_.'@odata.type' -eq '#microsoft.graph.officeSuiteApp' }
+    } else {
+        New-GraphGetRequest -Uri $BaseUri -tenantid $TenantFilter | Where-Object { $_.DisplayName -eq $AppConfig.Applicationname }
+    }
     if ($ApplicationList.displayname.count -ge 1) {
         Write-LogMessage -API $APIName -tenant $TenantFilter -message "$($AppConfig.Applicationname) exists. Skipping this application" -Sev 'Info'
         return $null
@@ -170,14 +201,11 @@ function New-CIPPIntuneAppDeployment {
             $NewApp = Add-CIPPW32ScriptApplication -TenantFilter $TenantFilter -Properties ([PSCustomObject]$Properties)
         }
         'OfficeApp' {
-            # Strip read-only properties that Graph API won't accept on create
-            $ObjBody = $IntuneBody
-            if ($ObjBody -is [string]) { $ObjBody = $ObjBody | ConvertFrom-Json -Depth 100 }
-            $ReadOnlyProps = @('id', 'createdDateTime', 'lastModifiedDateTime', 'uploadState', 'publishingState', 'isAssigned', 'roleScopeTagIds', 'dependentAppCount', 'supersedingAppCount', 'supersededAppCount', 'committedContentVersion', 'fileName', 'size', 'assignments@odata.context', 'assignments', 'AppAssignment', 'AppExclude')
-            foreach ($prop in $ReadOnlyProps) {
-                if ($ObjBody.PSObject.Properties[$prop]) {
-                    $ObjBody.PSObject.Properties.Remove($prop)
-                }
+            # Templates built in the wizard carry the individual Office fields rather than a
+            # pre-built IntuneBody, so build the body the same way Invoke-AddOfficeApp does.
+            $ObjBody = Get-CIPPOfficeAppBody -Config $AppConfig
+            if (-not $ObjBody) {
+                throw "No Office configuration could be built from the supplied settings for '$($AppConfig.Applicationname)'."
             }
             $NewApp = New-GraphPostRequest -Uri $BaseUri -tenantid $TenantFilter -Body (ConvertTo-Json -InputObject $ObjBody -Depth 10) -Type POST
         }

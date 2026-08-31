@@ -50,48 +50,17 @@ function Push-ExecScheduledCommand {
     # Task should be 'Pending' (queued by orchestrator) or 'Running' (retry/recovery)
     # We accept both to handle edge cases
 
-    # Check for rerun protection - prevent duplicate executions within the recurrence interval
-    # Do this BEFORE updating state to 'Running' to avoid getting stuck
-    if ($task.Recurrence -and $task.Recurrence -ne '0' -and !$IsMultiTenantExecution) {
-        # Calculate interval in seconds from recurrence string
-        $IntervalSeconds = switch -Regex ($task.Recurrence) {
-            '^(\d+)$' { [int64]$matches[1] * 86400 }  # Plain number = days
-            '(\d+)m$' { [int64]$matches[1] * 60 }
-            '(\d+)h$' { [int64]$matches[1] * 3600 }
-            '(\d+)d$' { [int64]$matches[1] * 86400 }
-            default { 0 }
-        }
+    # NOTE: Recurring scheduled tasks intentionally have NO rerun-cache protection here.
+    # Duplicate execution is already prevented by the orchestrator's own state machine:
+    #   - the ETag claim flips the task to 'Pending' atomically (no concurrent dispatch),
+    #   - 'Pending'/'Running' tasks are not re-picked until they go stale (1h/4h),
+    #   - ScheduledTime is advanced on completion so the task isn't eligible again until due.
+    # A separate rerun cache (Test-CIPPRerun) was a second, independent clock that drifted out
+    # of sync with ScheduledTime whenever a run didn't finish advancing the schedule, which both
+    # deadlocked tasks and blocked the orchestrator's stuck-task recovery. ScheduledTime is the
+    # single source of truth.
 
-        if ($IntervalSeconds -gt 0) {
-            # Round down to nearest 15-minute interval (900 seconds) since that's when orchestrator runs
-            # This prevents rerun blocking issues due to slight timing variations
-            $FifteenMinutes = 900
-            $AdjustedInterval = [Math]::Floor($IntervalSeconds / $FifteenMinutes) * $FifteenMinutes
-
-            # Ensure we have at least one 15-minute interval
-            if ($AdjustedInterval -lt $FifteenMinutes) {
-                $AdjustedInterval = $FifteenMinutes
-            }
-            # Use task RowKey as API identifier for rerun cache
-            $RerunParams = @{
-                TenantFilter = $Tenant
-                Type         = 'ScheduledTask'
-                API          = $task.RowKey
-                Interval     = $AdjustedInterval
-                BaseTime     = [int64]$task.ScheduledTime
-                Headers      = $Headers
-            }
-
-            $IsRerun = Test-CIPPRerun @RerunParams
-            if ($IsRerun) {
-                Write-Information "Scheduled task $($task.Name) for tenant $Tenant was recently executed. Skipping to prevent duplicate execution."
-                Remove-Variable -Name ScheduledTaskId -Scope Script -ErrorAction SilentlyContinue
-                return
-            }
-        }
-    }
-
-    # Also check for one-time task rerun protection based on ExecutedTime
+    # One-time task rerun protection based on ExecutedTime (the task's own field, not a cache)
     if ((!$task.Recurrence -or $task.Recurrence -eq '0') -and $task.ExecutedTime -and !$IsMultiTenantExecution) {
         $currentUnixTime = [int64](([datetime]::UtcNow) - (Get-Date '1/1/1970')).TotalSeconds
         $timeSinceExecution = $currentUnixTime - [int64]$task.ExecutedTime
@@ -110,14 +79,11 @@ function Push-ExecScheduledCommand {
         $TriggerType = $Trigger.Type.value ?? $Trigger.Type
         if ($TriggerType -eq 'DeltaQuery') {
             $IsTriggerTask = $true
-            $DeltaUrl = Get-DeltaQueryUrl -TenantFilter $Tenant -PartitionKey $task.RowKey
-            $DeltaQuery = @{
-                DeltaUrl     = $DeltaUrl
-                TenantFilter = $Tenant
-                PartitionKey = $task.RowKey
-            }
-            $Query = New-GraphDeltaQuery @DeltaQuery
 
+            #if recurrence is just a number, add it in days.
+            if ($task.Recurrence -match '^\d+$') {
+                $task.Recurrence = $task.Recurrence + 'd'
+            }
             $secondsToAdd = switch -Regex ($task.Recurrence) {
                 '(\d+)m$' { [int64]$matches[1] * 60 }
                 '(\d+)h$' { [int64]$matches[1] * 3600 }
@@ -127,13 +93,45 @@ function Push-ExecScheduledCommand {
 
             $Minutes = [int]($secondsToAdd / 60)
 
-            $DeltaQueryConditions = @{
-                Query        = $Query
-                Trigger      = $Trigger
-                TenantFilter = $Tenant
-                LastTrigger  = [datetime]::UtcNow.AddMinutes(-$Minutes)
+            # Without this a throw here escapes the entrypoint, leaving the task on the orchestrator's
+            # 'Pending' claim with nothing recorded, to be re-picked as a stale claim every hour.
+            try {
+                $DeltaUrl = Get-DeltaQueryUrl -TenantFilter $Tenant -PartitionKey $task.RowKey
+                $DeltaQuery = @{
+                    DeltaUrl     = $DeltaUrl
+                    TenantFilter = $Tenant
+                    PartitionKey = $task.RowKey
+                }
+                $Query = New-GraphDeltaQuery @DeltaQuery
+
+                $DeltaQueryConditions = @{
+                    Query        = $Query
+                    Trigger      = $Trigger
+                    TenantFilter = $Tenant
+                    LastTrigger  = [datetime]::UtcNow.AddMinutes(-$Minutes)
+                }
+                $DeltaResults = Test-DeltaQueryConditions @DeltaQueryConditions
+            } catch {
+                $ExceptionData = Get-CippException -Exception $_
+                if (!$IsMultiTenantExecution) {
+                    if ($secondsToAdd -gt 0) {
+                        $unixtimeNow = [int64](([datetime]::UtcNow) - (Get-Date '1/1/1970')).TotalSeconds
+                        if ([int64]$task.ScheduledTime -lt ($unixtimeNow - $secondsToAdd)) {
+                            $task.ScheduledTime = $unixtimeNow
+                        }
+                    }
+                    $null = Update-AzDataTableEntity -Force @Table -Entity @{
+                        PartitionKey  = $task.PartitionKey
+                        RowKey        = $task.RowKey
+                        Results       = "$($ExceptionData.NormalizedError)"
+                        ScheduledTime = [string]([int64]$task.ScheduledTime + [int64]$secondsToAdd)
+                        TaskState     = $secondsToAdd -gt 0 ? 'Failed - Planned' : 'Failed'
+                    }
+                }
+                Write-LogMessage -API 'Scheduler_UserTasks' -tenant $Tenant -tenantid $TenantInfo.customerId -message "Failed to evaluate the delta query trigger for task $($task.Name): $($ExceptionData.NormalizedError)" -sev Error -LogData $ExceptionData
+                Remove-Variable -Name ScheduledTaskId -Scope Script -ErrorAction SilentlyContinue
+                return
             }
-            $DeltaResults = Test-DeltaQueryConditions @DeltaQueryConditions
 
             if (-not $DeltaResults.ConditionsMet) {
                 Write-Information "Delta query conditions not met for tenant $Tenant. Skipping execution."
@@ -356,7 +354,11 @@ function Push-ExecScheduledCommand {
         }
     } catch {
         Write-Information "Failed to run task: $($_.Exception.Message)"
-        $errorMessage = $_.Exception.Message
+        # Captured before anything else can overwrite $_. Get-NormalizedError unwraps a JSON Graph or
+        # Exchange error body and returns the original string when it recognises nothing, so this is
+        # never less informative than the raw exception message it replaced.
+        $ExceptionData = Get-CippException -Exception $_
+        $errorMessage = $ExceptionData.NormalizedError
         #if recurrence is just a number, add it in days.
         if ($task.Recurrence -match '^\d+$') {
             $task.Recurrence = $task.Recurrence + 'd'
@@ -387,7 +389,7 @@ function Push-ExecScheduledCommand {
                 TaskState     = $State
             }
         }
-        Write-LogMessage -API 'Scheduler_UserTasks' -tenant $Tenant -tenantid $TenantInfo.customerId -message "Failed to execute task $($task.Name): $errorMessage" -sev Error -LogData (Get-CippExceptionData -Exception $_.Exception)
+        Write-LogMessage -API 'Scheduler_UserTasks' -tenant $Tenant -tenantid $TenantInfo.customerId -message "Failed to execute task $($task.Name): $errorMessage" -sev Error -LogData $ExceptionData
     }
 
     # For orchestrator-based commands, skip post-execution alerts as they will be handled by the orchestrator's post-execution function

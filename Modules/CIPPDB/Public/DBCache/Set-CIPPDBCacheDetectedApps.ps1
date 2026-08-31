@@ -24,42 +24,47 @@ function Set-CIPPDBCacheDetectedApps {
         $JobRow = Get-CIPPAzDataTableEntity @JobsTable -Filter "PartitionKey eq '$TenantFilter' and RowKey eq '$ReportName'"
 
         if (-not $JobRow) {
-            Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "No $ReportName job submitted - skipping detected apps cache" -sev Info
-            return
+            Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "No $ReportName export job pending - submitting a new one" -sev Info
+            $null = New-CIPPIntuneReportExportJob -TenantFilter $TenantFilter -ReportName $ReportName
+            $JobRow = Get-CIPPAzDataTableEntity @JobsTable -Filter "PartitionKey eq '$TenantFilter' and RowKey eq '$ReportName'"
         }
 
         $JobId = $JobRow.JobId
         if (-not $JobId) {
             Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "IntuneReportJobs row missing JobId - removing" -sev Warning
-            Remove-AzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
+            Remove-CIPPAzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
             return
         }
 
-        try {
-            $Job = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/deviceManagement/reports/exportJobs/$JobId" -tenantid $TenantFilter
-        } catch {
-            $ErrorMessage = Get-CippException -Exception $_
-            Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "$ReportName job $JobId not retrievable: $($ErrorMessage.NormalizedError)" -sev Warning -LogData $ErrorMessage
-            Remove-AzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
-            return
-        }
 
-        switch ($Job.status) {
-            'completed' { }
-            'failed' {
+        $Deadline = [datetime]::UtcNow.AddMinutes(4)
+        while ($true) {
+            try {
+                $Job = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/deviceManagement/reports/exportJobs/$JobId" -tenantid $TenantFilter
+            } catch {
+                $ErrorMessage = Get-CippException -Exception $_
+                Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "$ReportName job $JobId not retrievable: $($ErrorMessage.NormalizedError)" -sev Warning -LogData $ErrorMessage
+                Remove-CIPPAzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
+                return
+            }
+
+            if ($Job.status -eq 'completed') { break }
+            if ($Job.status -eq 'failed') {
                 Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "$ReportName job $JobId failed" -sev Error
-                Remove-AzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
+                Remove-CIPPAzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
                 return
             }
-            default {
-                Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "$ReportName job $JobId still '$($Job.status)' - skipping" -sev Info
+            if ([datetime]::UtcNow -ge $Deadline) {
+                # Keep the job row so the next cache run can consume the result
+                Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "$ReportName job $JobId still '$($Job.status)' after waiting - the result will be cached on the next run" -sev Info
                 return
             }
+            Start-Sleep -Seconds 20
         }
 
         if (-not $Job.url) {
             Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "$ReportName job $JobId completed but no url returned" -sev Error
-            Remove-AzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
+            Remove-CIPPAzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
             return
         }
 
@@ -115,11 +120,19 @@ function Set-CIPPDBCacheDetectedApps {
             $App.deviceCount++
         }
 
-        $DetectedApps = @($AppsByKey.Values)
-        Add-CIPPDbItem -TenantFilter $TenantFilter -Type 'DetectedApps' -Data $DetectedApps -AddCount
-        Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "Cached $($DetectedApps.Count) detected apps with devices from export $JobId" -sev Info
+        # The grouped apps already hold every device row, so release the parse tree before the
+        # write rather than carrying both through it.
+        $ExportRows = $null
 
-        Remove-AzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
+        # Streamed into the writer instead of copied into an array first: Add-CIPPDbItem batches
+        # internally, so this drops a full-length copy of the app list at the point where the
+        # grouped devices are still live.
+        $DetectedAppCount = $AppsByKey.Count
+        $AppsByKey.Values | Add-CIPPDbItem -TenantFilter $TenantFilter -Type 'DetectedApps' -AddCount
+        $AppsByKey = $null
+        Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "Cached $DetectedAppCount detected apps with devices from export $JobId" -sev Info
+
+        Remove-CIPPAzDataTableEntity @JobsTable -Entity $JobRow -Force -ErrorAction SilentlyContinue
     } catch {
         $ErrorMessage = Get-CippException -Exception $_
         Write-LogMessage -API 'CIPPDBCache' -tenant $TenantFilter -message "Failed to cache detected apps: $($ErrorMessage.NormalizedError)" -sev Error -LogData $ErrorMessage
