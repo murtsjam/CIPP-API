@@ -12,14 +12,13 @@ BeforeAll {
 
     function Test-CIPPStandardLicense { [CmdletBinding()] param($StandardName, $TenantFilter, $Preset, [switch]$SkipLog) }
     function Get-CIPPTextReplacement { [CmdletBinding()] param($TenantFilter, $Text, [switch]$EscapeForJson) }
-    function New-ExoRequest { [CmdletBinding()] param($tenantid, $cmdlet, $cmdParams, [switch]$UseSystemMailbox) }
+    function New-ExoRequest { [CmdletBinding()] param($tenantid, $cmdlet, $cmdParams, $UseSystemMailbox) }
     function Write-LogMessage { [CmdletBinding()] param($API, $tenant, $message, $sev, $LogData) }
     function Write-StandardsAlert { [CmdletBinding()] param($message, $object, $tenant, $standardName, $standardId) }
     function Set-CIPPStandardsCompareField {
         [CmdletBinding()]
         param($FieldName, $FieldValue, $CurrentValue, $ExpectedValue, $TenantFilter)
     }
-    function Add-CIPPBPAField { [CmdletBinding()] param($FieldName, $FieldValue, $StoreAs, $Tenant) }
     function Get-NormalizedError { [CmdletBinding()] param($Message) $Message }
     function Get-CippException { [CmdletBinding()] param($Exception) @{ NormalizedError = $Exception.Exception.Message } }
 
@@ -51,7 +50,6 @@ Describe 'Invoke-CIPPStandardUserSubmissions comparison payload' {
         }
         Mock -CommandName Write-LogMessage -MockWith { }
         Mock -CommandName Write-StandardsAlert -MockWith { }
-        Mock -CommandName Add-CIPPBPAField -MockWith { }
         Mock -CommandName Set-CIPPStandardsCompareField -MockWith {
             param($FieldName, $FieldValue, $CurrentValue, $ExpectedValue, $TenantFilter)
             $script:compareFields.Add([pscustomobject]@{
@@ -115,6 +113,74 @@ Describe 'Invoke-CIPPStandardUserSubmissions comparison payload' {
         $Comparison.Expected.CustomDestinationRule.SentTo | Should -Be $Email
         $Comparison.Current.CustomDestinationRule.State | Should -Be 'Enabled'
         $Comparison.Current.CustomDestinationRule.SentTo | Should -Be $Email
+    }
+
+    It 'expects reporting to Microsoft OFF when the destination is the reporting mailbox only' {
+        $Email = 'phish@contoso.com'
+        $script:policyState = [pscustomobject]@{
+            EnableReportToMicrosoft          = $false
+            ReportJunkToCustomizedAddress    = $true
+            ReportNotJunkToCustomizedAddress = $true
+            ReportPhishToCustomizedAddress   = $true
+            ReportJunkAddresses              = $Email
+            ReportNotJunkAddresses           = $Email
+            ReportPhishAddresses             = $Email
+        }
+        $script:ruleState = [pscustomobject]@{
+            State  = 'Enabled'
+            SentTo = $Email
+        }
+
+        Invoke-CIPPStandardUserSubmissions -Tenant $script:Tenant -Settings @{
+            state             = 'enable'
+            email             = $Email
+            reportDestination = 'Mailbox'
+            report            = $true
+        }
+
+        $Comparison = $script:compareFields[0]
+        $Comparison.Expected.EnableReportToMicrosoft | Should -BeFalse
+        $Comparison.Expected.CustomDestinationRule.State | Should -Be 'Enabled'
+        $Comparison.Expected.CustomDestinationRule.SentTo | Should -Be $Email
+        $Comparison.Current.EnableReportToMicrosoft | Should -BeFalse
+    }
+
+    It 'remediates to the reporting mailbox only without re-enabling reporting to Microsoft' {
+        # The exact regression from issue #409: a tenant set to 'My reporting mailbox only'
+        # must not be flipped back to reporting to Microsoft by the standard.
+        $Email = 'phish@contoso.com'
+        $script:ruleState = @()
+
+        Invoke-CIPPStandardUserSubmissions -Tenant $script:Tenant -Settings @{
+            state             = 'enable'
+            email             = $Email
+            reportDestination = 'Mailbox'
+            remediate         = $true
+        }
+
+        Should -Invoke New-ExoRequest -Times 1 -Exactly -ParameterFilter {
+            $cmdlet -eq 'Set-ReportSubmissionPolicy' -and
+            $cmdParams.EnableReportToMicrosoft -eq $false -and
+            $cmdParams.ReportPhishToCustomizedAddress -eq $true -and
+            $cmdParams.ReportPhishAddresses -eq $Email
+        }
+    }
+
+    It 'still remediates to Microsoft and the reporting mailbox when no destination is chosen' {
+        $Email = 'phish@contoso.com'
+        $script:ruleState = @()
+
+        Invoke-CIPPStandardUserSubmissions -Tenant $script:Tenant -Settings @{
+            state     = 'enable'
+            email     = $Email
+            remediate = $true
+        }
+
+        Should -Invoke New-ExoRequest -Times 1 -Exactly -ParameterFilter {
+            $cmdlet -eq 'Set-ReportSubmissionPolicy' -and
+            $cmdParams.EnableReportToMicrosoft -eq $true -and
+            $cmdParams.ReportPhishAddresses -eq $Email
+        }
     }
 
     It 'shows both reporting and the custom destination rule disabled when the standard is disabled' {

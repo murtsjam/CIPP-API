@@ -6,7 +6,7 @@ function Invoke-ListGraphRequest {
     .ROLE
         CIPP.Core.Read
     .DESCRIPTION
-        Proxies an arbitrary Microsoft Graph API GET request for a tenant. Supports custom endpoints, filters, pagination, and field selection via query parameters.
+        Proxies an arbitrary Microsoft Graph API GET request for a tenant. Supports custom endpoints, filters, pagination, and field selection via query parameters. If a request returns a permission error, retry with AsApp set to true: admin and application-scoped endpoints (for example admin/sharepoint/settings) require the application's own permissions rather than the default delegated access.
     #>
     [CmdletBinding()]
     param($Request, $TriggerMetadata)
@@ -81,8 +81,18 @@ function Invoke-ListGraphRequest {
         $GraphRequestParams.QueueId = $Request.Query.QueueId
     }
 
-    if ($Request.Query.Version) {
-        $GraphRequestParams.Version = $Request.Query.Version
+    # Graph API version to call: v1.0 or beta. Defaults to beta when omitted.
+    switch ($Request.Query.Version) {
+        'v1.0' { $GraphRequestParams.Version = 'v1.0' }
+        'beta' { $GraphRequestParams.Version = 'beta' }
+        default {
+            if ($Request.Query.Version) {
+                return ([HttpResponseContext]@{
+                        StatusCode = [HttpStatusCode]::BadRequest
+                        Body       = 'Version must be v1.0 or beta.'
+                    })
+            }
+        }
     }
 
     # Return only the first page and stop. The default follows every @odata.nextLink until
@@ -99,11 +109,24 @@ function Invoke-ListGraphRequest {
         $GraphRequestParams.ManualPagination = [System.Convert]::ToBoolean($Request.Query.manualPagination)
     }
 
+    # $top is Graph's page size, so $top=1 with pagination fetches the entire collection one
+    # record per round trip. A caller asking for 1 wants one record; only an explicit
+    # NoPagination/manualPagination overrides this.
+    if ($Parameters.'$top' -eq '1' -and $null -eq $Request.Query.NoPagination -and $null -eq $Request.Query.manualPagination) {
+        $GraphRequestParams.NoPagination = $true
+    }
+
     # Continue a manualPagination walk: pass back the @odata.nextLink returned with the
     # previous page. Endpoint is still required, and the other query options are already
     # encoded in the link.
     if ($Request.Query.nextLink) {
         $GraphRequestParams.nextLink = $Request.Query.nextLink
+    }
+
+    # Paged AllTenants cache reads only: target page size in bytes of raw JSON, clamped
+    # between 262144 and 8388608 (default 4000000). Pages always hold at least one whole tenant.
+    if ($Request.Query.maxPageBytes -as [int]) {
+        $GraphRequestParams.MaxPageBytes = [int]$Request.Query.maxPageBytes
     }
 
     # Return just the number of matching records instead of the records themselves. The
@@ -156,6 +179,27 @@ function Invoke-ListGraphRequest {
 
         if ($script:LastGraphResponseHeaders) {
             $Metadata.GraphHeaders = $script:LastGraphResponseHeaders
+        }
+
+        # Paged AllTenants cache serve: one page of tenant blobs plus Metadata.nextLink.
+        if ($UseRawJson -and $Results -isnot [string] -and $Results.PSObject.Properties.Name -contains 'CippPagedJson') {
+            if ($Request.Headers.'x-ms-coldstart' -eq 1) {
+                $Metadata.ColdStart = $true
+            }
+            if ($Results.CippNextLink) {
+                $Metadata.nextLink = $Results.CippNextLink
+            } else {
+                # Do not echo the incoming token back on the final page.
+                $Metadata.Remove('nextLink')
+            }
+            $MetadataJson = ConvertTo-Json -InputObject $Metadata -Depth 5 -Compress
+            $GraphRequestData = '{"Results":' + $Results.CippPagedJson + ',"Metadata":' + $MetadataJson + '}'
+
+            return ([HttpResponseContext]@{
+                    StatusCode  = [HttpStatusCode]::OK
+                    ContentType = 'application/json'
+                    Body        = $GraphRequestData
+                })
         }
 
         # RawJsonArray returns a JSON string directly — skip object-level processing

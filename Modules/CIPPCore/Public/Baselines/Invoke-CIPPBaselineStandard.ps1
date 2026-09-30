@@ -108,6 +108,24 @@ function Invoke-CIPPBaselineStandard {
         if ($Definition.package) { throw "Package standard $($Item.BaseName) must be expanded by the resolver and never executes directly." }
         $Label = $Definition.label ?? $Item.Standard
 
+        # A disabled definition is not ready for use: the catalog hides it, and anything
+        # still configured from before skips here - never compared, never written - with
+        # the reason visible instead of a silent absence.
+        if ($Definition.disabled -eq $true) {
+            if ($GradeOnly) { return $null }
+            Write-LogMessage -API 'Baselines' -tenant $TenantFilter -message "`"$Label`" is disabled (not ready for use) - skipped without comparing or changing anything. - Run $RunId" -Sev 'Info'
+            $Disabled = [PSCustomObject]@{
+                Item = $Item; Mode = $Mode; TriggeredBy = $TriggeredBy
+                ExpectedValue = $null; CurrentValue = $null; Compliant = $false
+                PendingVerification = $false; LicenseAvailable = $true
+                Status = 'No Data'; Remediated = $false; Outcome = 'Skipped-Disabled'
+                Diff = $null; RowDiff = @(); Manual = $null; Inheritance = @($Item.Tiers)
+                AlertEvent = $null; CacheType = $null
+            }
+            Set-CIPPBaselineResult -Result $Disabled -Prior $null -RunId $RunId -Detail 'This standard is disabled - it is not ready for use and was skipped.'
+            return $Disabled
+        }
+
         # Definition-aware variable pass: declared defaults apply at RUN time, not just as
         # editor seeds. A blank variable would otherwise splice its raw '%token%' into the
         # expected value and grade as permanent fake drift ('%enabled%' vs true). Rules:
@@ -242,7 +260,7 @@ function Invoke-CIPPBaselineStandard {
         # Per-property verdicts default to 'accept' (tolerate); 'denyDelete' marks the path's
         # object for deletion. Both filter the diff; deny-delete parks the row at Delete
         # Pending instead of scoring it Accepted.
-        $AcceptedPaths = $(try { $Prior.AcceptedPaths | ConvertFrom-Json } catch { $null })
+        $AcceptedPaths = $(try { if ($Prior.AcceptedPaths) { $Prior.AcceptedPaths | ConvertFrom-Json -ErrorAction Stop } } catch { $null })
         $AcceptedKeys = @($AcceptedPaths.PSObject.Properties.Name | Where-Object { $_ })
         $DenyDeleteKeys = @($AcceptedPaths.PSObject.Properties | Where-Object { $_.Name -and $_.Value.verdict -eq 'denyDelete' } | ForEach-Object { $_.Name })
         $ExpectedTemplate = & $Render $Definition.expected $Item.Variables
@@ -342,7 +360,7 @@ function Invoke-CIPPBaselineStandard {
             if ($GradeOnly) { return $null }
             $Manual = & $Render $Definition.manual $Item.Variables
             $Result.Manual = $Manual
-            $Completed = [bool]($(try { $Prior.CurrentValue | ConvertFrom-Json } catch { $null })?.completed)
+            $Completed = [bool]($(try { if ($Prior.CurrentValue) { $Prior.CurrentValue | ConvertFrom-Json -ErrorAction Stop } } catch { $null })?.completed)
             $LastDone = if ("$($Prior.LastRemediated)" -match '^\d+$') { [int64]$Prior.LastRemediated } else { 0 }
             $ReopenSeconds = switch ($Manual.reopen) {
                 'weekly' { 7 * 86400 }

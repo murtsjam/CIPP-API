@@ -18,11 +18,10 @@ BeforeAll {
     function Test-CIPPStandardLicense { [CmdletBinding()] param($StandardName, $TenantFilter, $RequiredCapabilities, $Preset, [switch]$SkipLog) }
     function New-GraphGetRequest { [CmdletBinding()] param($uri, $tenantid, $AsApp, $NoAuthCheck, $skipTokenCache, [switch]$ComplexFilter, $CountOnly) }
     function New-GraphBulkRequest { [CmdletBinding()] param($tenantid, $NoAuthCheck, $scope, $asapp, $Requests, $NoPaginateIds, $Version, $Headers) }
-    function Set-CIPPSPOSite { [CmdletBinding()] param($TenantFilter, $SiteUrl, $Properties) }
+    function Set-CIPPSPOSiteBulk { [CmdletBinding()] param($TenantFilter, $Sites, $MaxConcurrency, $MaxRetries, [switch]$UseCertificate) }
     function Write-LogMessage { [CmdletBinding()] param($API, $tenant, $message, $sev, $headers, $LogData) }
     function Write-StandardsAlert { [CmdletBinding()] param($message, $object, $tenant, $standardName, $standardId) }
     function Set-CIPPStandardsCompareField { [CmdletBinding()] param($FieldName, $CurrentValue, $ExpectedValue, $Tenant) }
-    function Add-CIPPBPAField { [CmdletBinding()] param($FieldName, $FieldValue, $StoreAs, $Tenant) }
     function Get-NormalizedError { [CmdletBinding()] param($Message) $Message }
     function Get-CippException { [CmdletBinding()] param($Exception) @{ NormalizedError = $Exception.Exception.Message } }
 
@@ -72,15 +71,19 @@ Describe 'Invoke-CIPPStandardOneDriveLicensedQuota' {
         Mock -CommandName Test-CIPPStandardLicense -MockWith { $true }
         Mock -CommandName Write-StandardsAlert -MockWith { }
         Mock -CommandName Set-CIPPStandardsCompareField -MockWith { }
-        Mock -CommandName Add-CIPPBPAField -MockWith { }
         Mock -CommandName Write-LogMessage -MockWith {
             param($API, $tenant, $message, $sev, $LogData)
             $script:logs.Add(@{ Message = $message; Sev = $sev })
         }
-        Mock -CommandName Set-CIPPSPOSite -MockWith {
-            param($TenantFilter, $SiteUrl, $Properties)
-            $script:setCalls.Add(@{ SiteUrl = $SiteUrl; Properties = $Properties })
-            return @([pscustomobject]@{ SchemaVersion = '15.0.0.0'; ErrorInfo = $null })
+        # The standard raises quotas through one concurrent Set-CIPPSPOSiteBulk fan-out rather than
+        # a Set-CIPPSPOSite call per drive. Expand its -Sites back into the per-site records the
+        # assertions read, and grade every site a success unless a test overrides this mock.
+        Mock -CommandName Set-CIPPSPOSiteBulk -MockWith {
+            param($TenantFilter, $Sites, $MaxConcurrency, $MaxRetries, [switch]$UseCertificate)
+            @(foreach ($Site in $Sites) {
+                    $script:setCalls.Add(@{ SiteUrl = $Site.SiteUrl; Properties = $Site.Properties })
+                    [pscustomobject]@{ SiteUrl = $Site.SiteUrl; Success = $true; Error = $null }
+                })
         }
     }
 
@@ -162,13 +165,16 @@ Describe 'Invoke-CIPPStandardOneDriveLicensedQuota' {
         }
 
         It 'continues with the remaining drives when one CSOM update fails' {
-            Mock -CommandName Set-CIPPSPOSite -MockWith {
-                param($TenantFilter, $SiteUrl, $Properties)
-                $script:setCalls.Add(@{ SiteUrl = $SiteUrl; Properties = $Properties })
-                if ($SiteUrl -match 'u1_contoso_com') {
-                    return @([pscustomobject]@{ ErrorInfo = [pscustomobject]@{ ErrorMessage = 'Access denied.' } })
-                }
-                return @([pscustomobject]@{ ErrorInfo = $null })
+            Mock -CommandName Set-CIPPSPOSiteBulk -MockWith {
+                param($TenantFilter, $Sites, $MaxConcurrency, $MaxRetries, [switch]$UseCertificate)
+                @(foreach ($Site in $Sites) {
+                        $script:setCalls.Add(@{ SiteUrl = $Site.SiteUrl; Properties = $Site.Properties })
+                        if ($Site.SiteUrl -match 'u1_contoso_com') {
+                            [pscustomobject]@{ SiteUrl = $Site.SiteUrl; Success = $false; Error = 'Access denied.' }
+                        } else {
+                            [pscustomobject]@{ SiteUrl = $Site.SiteUrl; Success = $true; Error = $null }
+                        }
+                    })
             }
 
             { Invoke-CIPPStandardOneDriveLicensedQuota -Tenant $script:Tenant -Settings @{ remediate = $true } } |

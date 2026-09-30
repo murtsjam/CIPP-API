@@ -27,22 +27,6 @@ function Invoke-ListSiteBrowser {
             })
     }
 
-    function ConvertTo-StorageUsedBytes {
-        param($Raw)
-        if ($null -eq $Raw -or $Raw -eq '') { return $null }
-        $Clean = ([string]$Raw).Replace(',', '').Trim()
-        if ($Clean -eq '') { return $null }
-        try { return [int64][double]$Clean } catch { return $null }
-    }
-
-    function ConvertTo-NullableInt64 {
-        param($Raw)
-        if ($null -eq $Raw -or $Raw -eq '') { return $null }
-        $Clean = ([string]$Raw).Replace(',', '').Trim()
-        if ($Clean -eq '') { return $null }
-        try { return [int64][double]$Clean } catch { return $null }
-    }
-
     function ConvertTo-SiteTypeLabel {
         param(
             [string]$Template,
@@ -66,6 +50,7 @@ function Invoke-ListSiteBrowser {
             '^(?i)STS' { return 'Team site (classic)' }
             '(?i)Redirect' { return 'Redirect site' }
             '^(?i)APPCATALOG$' { return 'App catalog' }
+            '^(?i)TEAMCHANNEL$' { return 'Team Channel' }
             default { return $Normalized }
         }
     }
@@ -154,6 +139,25 @@ function Invoke-ListSiteBrowser {
                 }
             }
 
+            $RequestId = 0
+            $MissingSiteRequests = foreach ($Row in $AdminRows) {
+                $RowUrl = ([string]$Row.SiteUrl).TrimEnd('/')
+                $RowSiteId = ([string]$Row.SiteId).Trim('{}')
+                if ([string]::IsNullOrWhiteSpace($RowUrl) -or $GraphByWebUrl.ContainsKey($RowUrl) -or ($RowSiteId -and $GraphBySiteId.ContainsKey($RowSiteId))) { continue }
+                $SiteUri = [System.Uri]$RowUrl
+                @{
+                    id     = [string]$RequestId++
+                    method = 'GET'
+                    url    = "sites/$($SiteUri.Host):$($SiteUri.AbsolutePath)?`$select=id,createdDateTime,description,name,displayName,webUrl,siteCollection,sharepointIds"
+                }
+            }
+            if (@($MissingSiteRequests).Count -gt 0) {
+                foreach ($Response in @(New-GraphBulkRequest -tenantid $TenantFilter -Requests @($MissingSiteRequests) -asapp $true | Where-Object { $_.status -eq 200 })) {
+                    $GraphBySiteId[([string]$Response.body.sharepointIds.siteId).Trim('{}').ToLowerInvariant()] = $Response.body
+                    $GraphByWebUrl[$Response.body.webUrl.TrimEnd('/').ToLowerInvariant()] = $Response.body
+                }
+            }
+
             foreach ($Row in $AdminRows) {
                 $RowUrl = [string]$Row.SiteUrl
                 $RowTitle = [string]$Row.Title
@@ -178,8 +182,6 @@ function Invoke-ListSiteBrowser {
                 }
 
                 $RootWebTemplate = [string]$Row.TemplateName
-                $StorageRaw = if ($null -ne $Row.'StorageUsed.') { $Row.'StorageUsed.' } else { $Row.StorageUsed }
-                $FilesRaw = if ($null -ne $Row.'NumOfFiles.') { $Row.'NumOfFiles.' } else { $Row.NumOfFiles }
 
                 $Results.Add([PSCustomObject]@{
                         type               = 'site'
@@ -191,10 +193,10 @@ function Invoke-ListSiteBrowser {
                         description        = $GraphSite.description
                         webUrl             = $(if ($RowUrl) { $RowUrl } else { $GraphSite.webUrl })
                         createdDateTime    = $(if ($Row.TimeCreated) { $Row.TimeCreated } else { $GraphSite.createdDateTime })
-                        storageUsedInBytes = ConvertTo-StorageUsedBytes -Raw $StorageRaw
+                        storageUsedInBytes = $Row.StorageUsed
                         siteType           = ConvertTo-SiteTypeLabel -Template $RootWebTemplate -ItemType 'site'
                         rootWebTemplate    = $RootWebTemplate
-                        fileCount          = ConvertTo-NullableInt64 -Raw $FilesRaw
+                        fileCount          = $Row.NumOfFiles
                     })
             }
 
@@ -221,7 +223,7 @@ function Invoke-ListSiteBrowser {
             if ([string]::IsNullOrWhiteSpace($SiteId)) {
                 $SiteId = $SiteMeta.id
             }
-            $BaseUri = "$($SiteUrl.TrimEnd('/'))/_api"
+            $BaseUri = (Resolve-CIPPSharePointRestContext -TenantFilter $TenantFilter -SiteUrl $SiteUrl -SharePointInfo $SharePointInfo).BaseUri
             $SiteInfo = [PSCustomObject]@{
                 id          = $SiteId
                 webUrl      = $SiteUrl
@@ -234,27 +236,44 @@ function Invoke-ListSiteBrowser {
             foreach ($List in @($Lists | Where-Object { $_.list.hidden -ne $true -and $_.list.template -in @('documentLibrary', 'webPageLibrary') })) {
                 $StorageUsed = $null
                 $FileCount = $null
+                $FileStreamSize = $null
+                $MetadataSize = $null
+                $VersionEstimate = $null
                 try {
                     $Metrics = New-GraphGetRequest -uri "$BaseUri/web/lists(guid'$($List.id)')/RootFolder?`$select=StorageMetrics&`$expand=StorageMetrics" -tenantid $TenantFilter -scope $SpoScope -extraHeaders $JsonAccept -UseCertificate -AsApp $true
-                    $StorageUsed = ConvertTo-StorageUsedBytes -Raw $Metrics.StorageMetrics.TotalSize
-                    $FileCount = ConvertTo-NullableInt64 -Raw $Metrics.StorageMetrics.TotalFileCount
+                    $TotalSize = ConvertTo-SPOAdminListInt64 -Raw $Metrics.StorageMetrics.TotalSize
+                    $FileStreamSize = ConvertTo-SPOAdminListInt64 -Raw $Metrics.StorageMetrics.TotalFileStreamSize
+                    $MetadataSize = ConvertTo-SPOAdminListInt64 -Raw $Metrics.StorageMetrics.MetadataSize
+                    $FileCount = ConvertTo-SPOAdminListInt64 -Raw $Metrics.StorageMetrics.TotalFileCount
+                    $StorageUsed = $TotalSize
+                    if ($null -ne $TotalSize) {
+                        $Tip = if ($null -ne $FileStreamSize) { $FileStreamSize } else { [int64]0 }
+                        $Meta = if ($null -ne $MetadataSize) { $MetadataSize } else { [int64]0 }
+                        $VersionEstimate = [Math]::Max([int64]0, $TotalSize - $Tip - $Meta)
+                    }
                 } catch {
                     $StorageUsed = $null
                     $FileCount = $null
+                    $FileStreamSize = $null
+                    $MetadataSize = $null
+                    $VersionEstimate = $null
                 }
 
                 $Results.Add([PSCustomObject]@{
-                        type               = 'library'
-                        id                 = $List.id
-                        siteId             = $SiteId
-                        displayName        = $List.displayName
-                        name               = $List.name
-                        template           = $List.list.template
-                        siteType           = ConvertTo-SiteTypeLabel -ItemType 'library' -LibraryTemplate $List.list.template
-                        webUrl             = $List.webUrl
-                        createdDateTime    = $List.createdDateTime
-                        storageUsedInBytes = $StorageUsed
-                        fileCount          = $FileCount
+                        type                   = 'library'
+                        id                     = $List.id
+                        siteId                 = $SiteId
+                        displayName            = $List.displayName
+                        name                   = $List.name
+                        template               = $List.list.template
+                        siteType               = ConvertTo-SiteTypeLabel -ItemType 'library' -LibraryTemplate $List.list.template
+                        webUrl                 = $List.webUrl
+                        createdDateTime        = $List.createdDateTime
+                        storageUsedInBytes     = $StorageUsed
+                        fileStreamSizeInBytes  = $FileStreamSize
+                        metadataSizeInBytes    = $MetadataSize
+                        versionEstimateBytes   = $VersionEstimate
+                        fileCount              = $FileCount
                     })
             }
         }

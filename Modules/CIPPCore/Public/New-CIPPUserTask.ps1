@@ -164,13 +164,23 @@ function New-CIPPUserTask {
             # task per level. They are separate Exchange operations anyway.
             $MailboxPermissions = @(@($UserObj.sharedMailboxPermission) | ForEach-Object { if ($_.value) { $_.value } else { $_ } } | Where-Object { $_ })
             if (-not $MailboxPermissions) { $MailboxPermissions = @('FullAccess') }
+            # FullAccessNoAutoMap is Full Access granted with automapping off. A grant carries one
+            # automapping flag, so when both variants are selected the explicit no-automapping wins.
+            if ($MailboxPermissions -contains 'FullAccessNoAutoMap') {
+                $MailboxPermissions = @($MailboxPermissions | Where-Object { $_ -ne 'FullAccess' })
+            }
             foreach ($Mailbox in @($UserObj.sharedMailboxes)) {
                 $MailboxId = if ($Mailbox.value) { $Mailbox.value } else { $Mailbox }
                 $MailboxLabel = if ($Mailbox.label) { $Mailbox.label } else { $MailboxId }
                 foreach ($MailboxPermission in $MailboxPermissions) {
+                    $PermissionLevel = if ($MailboxPermission -eq 'FullAccessNoAutoMap') { 'FullAccess' } else { $MailboxPermission }
+                    $AutoMap = $MailboxPermission -ne 'FullAccessNoAutoMap'
                     # AutoMap only applies to FullAccess, and is what makes Outlook mount the mailbox
                     # on its own, so no invitation is needed on this side of the feature.
-                    $AutoMapNote = if ($MailboxPermission -eq 'FullAccess') { ' Outlook adds the mailbox automatically.' } else { '' }
+                    $AutoMapNote = if ($PermissionLevel -ne 'FullAccess') { '' }
+                    elseif ($AutoMap) { ' Outlook adds the mailbox automatically.' }
+                    else { ' Automapping is off, so the user adds the mailbox to Outlook themselves.' }
+                    $PermissionDisplay = if ($AutoMap) { $PermissionLevel } else { 'FullAccess (no automapping)' }
                     $SharedAccessGrants.Add([PSCustomObject]@{
                             Identity   = $MailboxId
                             Kind       = 'mailbox'
@@ -181,12 +191,12 @@ function New-CIPPUserTask {
                                 TenantFilter    = $UserObj.tenantFilter
                                 UserId          = $MailboxId
                                 AccessUser      = $CreationResults.Username
-                                PermissionLevel = $MailboxPermission
+                                PermissionLevel = $PermissionLevel
                                 Action          = 'Add'
-                                AutoMap         = $true
+                                AutoMap         = $AutoMap
                                 APIName         = 'Shared Mailbox Onboarding'
                             }
-                            Success    = "Scheduled $MailboxPermission on the shared mailbox $MailboxLabel in 15 minutes.$AutoMapNote"
+                            Success    = "Scheduled $PermissionDisplay on the shared mailbox $MailboxLabel in 15 minutes.$AutoMapNote"
                         })
                 }
             }
@@ -220,6 +230,42 @@ function New-CIPPUserTask {
         }
     }
 
+    # SharePoint site membership is scheduled instead of run inline: a freshly created account cannot
+    # be resolved on a site (ensureuser) until it has replicated to SharePoint.
+    if ($UserObj.sharePointSites) {
+        $SiteRole = $UserObj.sharePointSiteRole.value ?? $UserObj.sharePointSiteRole ?? 'Members'
+        $SiteAccessTime = [int64](([datetime]::UtcNow).AddMinutes(15) - (Get-Date '1/1/1970')).TotalSeconds
+        foreach ($Site in @($UserObj.sharePointSites)) {
+            $SiteLabel = $Site.label ?? $Site.value
+            try {
+                $TaskBody = [PSCustomObject]@{
+                    TenantFilter  = $UserObj.tenantFilter
+                    Name          = "Add SharePoint Site Member: $($CreationResults.Username) -> $($Site.value) ($SiteRole)"
+                    Command       = @{ value = 'Set-CIPPSharePointSiteMember' }
+                    Parameters    = [PSCustomObject]@{
+                        TenantFilter      = $UserObj.tenantFilter
+                        UserPrincipalName = $CreationResults.Username
+                        Role              = $SiteRole
+                        SharePointType    = $Site.addedFields.rootWebTemplate
+                        GroupId           = $Site.addedFields.ownerPrincipalName
+                        SiteUrl           = $Site.value
+                        APIName           = 'SharePoint Site Onboarding'
+                    }
+                    ScheduledTime = $SiteAccessTime
+                    PostExecution = @{ Webhook = $false; Email = $false; PSA = $false }
+                }
+                $ScheduleResult = Add-CIPPScheduledTask -Task $TaskBody -hidden $false -Headers $Headers -DisallowDuplicateName $true
+                if ($ScheduleResult -like 'Successfully added task:*') {
+                    $Results.Add("Scheduled $SiteRole access to the SharePoint site $SiteLabel in 15 minutes.")
+                } else {
+                    $Results.Add("Failed to schedule SharePoint access to $($SiteLabel): $ScheduleResult")
+                }
+            } catch {
+                $Results.Add("Failed to schedule SharePoint access to $($SiteLabel): $($_.Exception.Message)")
+            }
+        }
+    }
+
     if ($UserObj.setManager) {
         $ManagerResults = Set-CIPPManager -Users $CreationResults.Username -Manager $UserObj.setManager.value -TenantFilter $UserObj.tenantFilter -Headers $Headers
         $Results.Add($ManagerResults.Result)
@@ -228,6 +274,16 @@ function New-CIPPUserTask {
     if ($UserObj.setSponsor) {
         $SponsorResults = Set-CIPPSponsor -Users $CreationResults.Username -Sponsor $UserObj.setSponsor.value -TenantFilter $UserObj.tenantFilter -Headers $Headers
         $Results.Add($SponsorResults.Result)
+    }
+
+    try {
+        if ($UserObj.perUserMfa -eq $true) {
+            $MfaResult = Set-CIPPPerUserMFA -TenantFilter $UserObj.tenantFilter -userId $CreationResults.Username -State 'enforced' -Headers $Headers -APIName $APIName
+            $Results.Add($MfaResult)
+        }
+    } catch {
+        Write-LogMessage -headers $Headers -API $APIName -tenant $($UserObj.tenantFilter) -message "Failed to set per-user MFA. Error:$($_.Exception.Message)" -Sev 'Error'
+        $Results.Add("Failed to set per-user MFA: $($_.Exception.Message)")
     }
 
     return @{

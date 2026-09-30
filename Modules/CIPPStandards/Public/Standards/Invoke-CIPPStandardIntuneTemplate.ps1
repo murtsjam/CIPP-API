@@ -46,12 +46,20 @@ function Invoke-CIPPStandardIntuneTemplate {
     $Table = Get-CippTable -tablename 'templates'
     $Filter = "PartitionKey eq 'IntuneTemplate'"
 
-    $Template = (Get-CIPPAzDataTableEntity @Table -Filter $Filter | Where-Object -Property RowKey -Like "$($Settings.TemplateList.value)*").JSON | ConvertFrom-Json -ErrorAction SilentlyContinue
+    # The template picker surfaces the row's GUID column while the engine keys on RowKey (built-in
+    # templates are keyed '<guid>.IntuneTemplate.json'). CIPP writes both to the same value, but a
+    # template re-synced from a repo by an older release can carry a JSON GUID that no longer matches
+    # its RowKey - accept either rather than reporting a template that is sitting in the table as gone.
+    $TemplateRef = [string]$Settings.TemplateList.value
+    $Template = (Get-CIPPAzDataTableEntity @Table -Filter $Filter | Where-Object { $_.RowKey -like "$TemplateRef*" -or $_.GUID -eq $TemplateRef } | Select-Object -First 1).JSON | ConvertFrom-Json -ErrorAction SilentlyContinue
     Write-Information "[IntuneTemplate][$Tenant] TableLoad: $([int]($sw.Elapsed - $lap).TotalMilliseconds)ms"
     $lap = $sw.Elapsed
 
     if ($null -eq $Template) {
-        Write-LogMessage -API 'Standards' -tenant $tenant -message "Failed to find template $($Settings.TemplateList.value). Has this Intune Template been deleted?" -sev 'Error'
+        # Name the template the standard still points at: the id alone sends people searching the
+        # template table for a row that was deleted, when the fix is in the standards template.
+        $TemplateLabel = if ($Settings.TemplateList.label) { "'$($Settings.TemplateList.label)' " } else { '' }
+        Write-LogMessage -API 'Standards' -tenant $tenant -message "Intune template $TemplateLabel($TemplateRef) no longer exists in the template library. Remove it from the standards or drift template, or select the template again." -sev 'Error'
         return $true
     }
 
@@ -90,6 +98,20 @@ function Invoke-CIPPStandardIntuneTemplate {
     # derives the policy name from the result, so looking up the unreplaced text searches for a name
     # that only ever existed in the template.
     $RawJSON = Get-CIPPTextReplacement -Text $rawJsonFromTemplate -TenantFilter $Tenant -EscapeForJson
+
+    # The Displayname and Description columns carry the same %variables%. For column-named types
+    # (Device, deviceCompliancePolicies, ...) Set-CIPPIntunePolicy both searches for the existing
+    # policy by this name and forces it onto the policy it creates, so leaving it raw makes the
+    # lookup hunt for a name the tenant never had while remediation keeps creating the resolved-name
+    # policy - a fresh duplicate on every run. Resolve them once here, as plain text rather than
+    # JSON-escaped (these fill bare string slots, not a serialized payload), so the lookup, the
+    # compare identity and the created name all agree. Names without a variable are left untouched.
+    if ($displayname -match '%') {
+        $displayname = Get-CIPPTextReplacement -Text $displayname -TenantFilter $Tenant
+    }
+    if ($description -match '%') {
+        $description = Get-CIPPTextReplacement -Text $description -TenantFilter $Tenant
+    }
 
     # Catalog and the Windows update profile types are deployed under the name in their payload
     # rather than the template's Displayname, so find them under the name they were created with.
@@ -149,6 +171,17 @@ function Invoke-CIPPStandardIntuneTemplate {
                     # Fall back to the full template. Over-reporting drift is recoverable; silently
                     # dropping settings from the baseline would hide real drift.
                     Write-Information "[IntuneTemplate][$Tenant] Could not resolve available settings for '$PolicyName', comparing against the full template: $($_.Exception.Message)"
+                }
+            }
+
+            if ($TemplateType -eq 'Admin') {
+                # Compare against the binds deployment would write: settings from an imported ADMX
+                # file have a different definition id in every tenant, so the stored binds only ever
+                # match the tenant the template was captured from.
+                try {
+                    $JSONTemplate = Resolve-CIPPIntuneAdminTemplateBinding -RawJSON (ConvertTo-Json -InputObject $JSONTemplate -Depth 100 -Compress) -TenantFilter $Tenant -DisplayName $PolicyName | ConvertFrom-Json
+                } catch {
+                    Write-Information "[IntuneTemplate][$Tenant] Could not resolve the administrative template settings for '$PolicyName' in this tenant, comparing against the stored template: $($_.Exception.Message)"
                 }
             }
 
@@ -324,7 +357,6 @@ function Invoke-CIPPStandardIntuneTemplate {
             }
         }
         Set-CIPPStandardsCompareField -FieldName "standards.IntuneTemplate.$id" -CurrentValue $CurrentValue -ExpectedValue $ExpectedValue -TenantFilter $Tenant
-        #Add-CIPPBPAField -FieldName "policy-$id" -FieldValue $Compare -StoreAs bool -Tenant $tenant
     }
 
     $sw.Stop()

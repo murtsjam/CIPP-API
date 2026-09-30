@@ -10,6 +10,7 @@ function Import-CommunityTemplate {
         $MigrationTable,
         $LocationData,
         $Source,
+        $Path,
         [switch]$Force
     )
 
@@ -82,6 +83,12 @@ function Import-CommunityTemplate {
             $Template.JSON = $NewJSON
             $Template | Add-Member -MemberType NoteProperty -Name SHA -Value $SHA -Force
             $Template | Add-Member -MemberType NoteProperty -Name Source -Value $Source -Force
+            if ($Path) {
+                $Template | Add-Member -MemberType NoteProperty -Name SourcePath -Value $Path -Force
+            }
+            if ($Template.PartitionKey -eq 'StandardsTemplateV2') {
+                $Template | Add-Member -MemberType NoteProperty -Name ContentHash -Value (Get-CIPPTemplateContentHash -JSON $NewJSON) -Force
+            }
             Add-CIPPAzDataTableEntity @Table -Entity $Template -Force
 
             if ($Existing -and $Existing.SHA -ne $SHA) {
@@ -150,6 +157,9 @@ function Import-CommunityTemplate {
                         RowKey       = if ($Duplicate) { $Duplicate.RowKey } else { $id }
                         Source       = $Source
                     }
+                    if ($Path) { $entity.SourcePath = $Path }
+                    # Full replace: keep the CIPP-assigned Package.
+                    if ($Duplicate -and $Duplicate.Package) { $entity.Package = $Duplicate.Package }
                     Add-CIPPAzDataTableEntity @Table -Entity $entity -Force
                     break
                 }
@@ -222,6 +232,9 @@ function Import-CommunityTemplate {
                         RowKey       = if ($Duplicate) { $Duplicate.RowKey } else { $id }
                         Source       = $Source
                     }
+                    if ($Path) { $entity.SourcePath = $Path }
+                    # Full replace: keep the CIPP-assigned Package.
+                    if ($Duplicate -and $Duplicate.Package) { $entity.Package = $Duplicate.Package }
                     Write-Information "Final entity: $($entity | ConvertTo-Json -Depth 10)"
 
                     Add-CIPPAzDataTableEntity @Table -Entity $entity -Force
@@ -311,10 +324,7 @@ function Import-CommunityTemplate {
                         RowKey       = if ($Duplicate) { $Duplicate.RowKey } else { $id }
                         Source       = $Source
                     }
-
-                    if ($Existing -and $Existing.Package) {
-                        $entity.Package = $Existing.Package
-                    }
+                    if ($Path) { $entity.SourcePath = $Path }
 
                     if ($Duplicate -and $Duplicate.Package) {
                         $entity.Package = $Duplicate.Package

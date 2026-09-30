@@ -17,6 +17,10 @@ function Send-CIPPAlert {
         $RowKey = [string][guid]::NewGuid(),
         $Attachments,
         $AffectedUser,
+        $PsaTicketPriority,
+        $PSAReference,
+        $PSATicketId,
+        $PSAConsolidationKey,
         [switch]$UseStandardizedSchema
     )
     Write-Information 'Shipping Alert'
@@ -62,16 +66,38 @@ function Send-CIPPAlert {
                     saveToSentItems = 'true'
                 }
 
-                # Add file attachments if provided
+                # Add file attachments if provided. sendMail rejects a request body over 4MB, so attach in
+                # order (the report PDF comes first); whatever no longer fits is uploaded to blob storage and
+                # linked from the body instead, or omitted if the upload fails. The links fit in the 64KB slack.
                 if ($Attachments -and $Attachments.Count -gt 0) {
-                    $PowerShellBody.message.attachments = @($Attachments | ForEach-Object {
-                        @{
-                            '@odata.type'  = '#microsoft.graph.fileAttachment'
-                            name           = $_.Name
-                            contentType    = $_.ContentType
-                            contentBytes   = $_.ContentBytes
+                    $Budget = 4MB - 64KB - [System.Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -Compress -Depth 10 -InputObject $PowerShellBody))
+                    $DownloadLinks = [System.Collections.Generic.List[string]]::new()
+                    $FittingAttachments = @($Attachments | ForEach-Object {
+                        $Size = ([string]$_.ContentBytes).Length + 512
+                        if ($Size -le $Budget) {
+                            $Budget = $Budget - $Size
+                            @{
+                                '@odata.type'  = '#microsoft.graph.fileAttachment'
+                                name           = $_.Name
+                                contentType    = $_.ContentType
+                                contentBytes   = $_.ContentBytes
+                            }
+                        } else {
+                            $Attachment = $_
+                            try {
+                                $Url = New-CIPPReportAttachmentLink -Name $Attachment.Name -ContentBytes $Attachment.ContentBytes -ContentType $Attachment.ContentType
+                                $DownloadLinks.Add("<li><a href=`"$([System.Net.WebUtility]::HtmlEncode($Url))`">$([System.Net.WebUtility]::HtmlEncode($Attachment.Name))</a></li>")
+                            } catch {
+                                Write-LogMessage -API 'Webhook Alerts' -tenant $TenantFilter -message "Omitting attachment $($Attachment.Name) from '$Title': too large for email and the blob upload failed: $($_.Exception.Message)" -sev Warning
+                            }
                         }
                     })
+                    if ($FittingAttachments.Count -gt 0) {
+                        $PowerShellBody.message.attachments = $FittingAttachments
+                    }
+                    if ($DownloadLinks.Count -gt 0) {
+                        $PowerShellBody.message.body.content = "$HTMLContent<p>The following attachment(s) were too large to attach to this email. Download them directly here:</p><ul>$($DownloadLinks -join '')</ul>"
+                    }
                 }
 
                 $JSONBody = ConvertTo-Json -Compress -Depth 10 -InputObject $PowerShellBody
@@ -343,8 +369,10 @@ function Send-CIPPAlert {
     if ($Type -eq 'psa') {
         Write-Information 'Trying to send to PSA'
         if (-not $config.sendtoIntegration) {
+            # The extension test button bypasses this gate, so log the skip where the operator looks.
             Write-Information 'PSA delivery skipped: sendtoIntegration is disabled in CippNotifications config. Enable it under Settings -> Notifications to route alerts to your PSA.'
-            return
+            Write-LogMessage -API 'Webhook Alerts' -tenant $TenantFilter -message "PSA delivery skipped for '$Title': 'Send to integration' is off under Settings > Notifications, so no PSA ticket was raised." -sev Warning
+            return 'Skipped: PSA delivery is disabled in the notification settings'
         }
         if ($PSCmdlet.ShouldProcess('PSA', 'Sending alert')) {
             try {
@@ -358,20 +386,46 @@ function Send-CIPPAlert {
                     AlertText  = "$HTMLContent"
                     AlertTitle = "$PsaTitle"
                 }
+                if ($PSAReference) {
+                    # Passed through verbatim - what a reference means is the PSA extension's call.
+                    $Alert.Reference = $PSAReference
+                    Write-Information "PSA alert reference: $PSAReference"
+                }
+                if ($PSATicketId) {
+                    $Alert.PsaTicketId = $PSATicketId
+                    Write-Information "PSA alert target ticket: $PSATicketId"
+                }
+                if ($PSAConsolidationKey) {
+                    # Optional stable key for PSA extensions that support consolidation.
+                    # Extensions that do not consume this property remain unaffected.
+                    $Alert.PSAConsolidationKey = $PSAConsolidationKey
+                    Write-Information 'PSA alert consolidation key supplied'
+                }
                 if ($AffectedUser) {
                     $Alert.AffectedUser = $AffectedUser
                     $UserLabel = if ($AffectedUser.UPN) { $AffectedUser.UPN } elseif ($AffectedUser.AzureOID) { "OID:$($AffectedUser.AzureOID)" } else { 'unknown' }
                     Write-Information "PSA alert AffectedUser: $UserLabel"
                 }
-                $PsaResult = New-CippExtAlert -Alert $Alert
-                if ($PsaResult) {
-                    Write-Information "PSA result: $PsaResult"
+                if ($PsaTicketPriority) {
+                    $Alert.PsaTicketPriority = $PsaTicketPriority
+                    Write-Information "PSA alert priority override: $PsaTicketPriority"
+                }
+                # Extensions report failure in their return value, one line per extension.
+                $PsaOutput = @(New-CippExtAlert -Alert $Alert)
+                $PsaResult = ($PsaOutput -join ' ').Trim()
+                $Failure = (@($PsaOutput | Where-Object { "$_" -match '^(Failed|Error)' }) -join ' ').Trim()
+                if ($Failure) {
+                    Write-LogMessage -API 'Webhook Alerts' -tenant $TenantFilter -message "PSA delivery failed for '$Title': $Failure" -sev Error
+                    return "Error: $Failure"
                 }
                 Write-LogMessage -API 'Webhook Alerts' -tenant $TenantFilter -message "Sent PSA alert $title" -sev info
+                # Same shape as the email and webhook branches; the text carries the ticket id.
+                return "Sent PSA alert: $title$(if ($PsaResult) { " - $PsaResult" })"
             } catch {
                 $ErrorMessage = Get-CippException -Exception $_
                 Write-Information "Could not send alerts to ticketing system: $($ErrorMessage.NormalizedError)"
                 Write-LogMessage -API 'Webhook Alerts' -tenant $TenantFilter -message "Could not send alerts to ticketing system: $($ErrorMessage.NormalizedError)" -sev Error -LogData $ErrorMessage
+                return "Error: Could not send alerts to ticketing system: $($ErrorMessage.NormalizedError)"
             }
         }
     }

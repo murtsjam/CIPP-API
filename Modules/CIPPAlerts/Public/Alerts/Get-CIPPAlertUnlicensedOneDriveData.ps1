@@ -58,6 +58,8 @@ function Get-CIPPAlertUnlicensedOneDriveData {
     }
 
     if ($Billing.UnlicensedOdbSyntexBillingEnabled -eq $true) {
+        # Billing is enabled, so unlicensed OneDrive data is retained: nothing can be pending deletion.
+        Write-AlertTrace -cmdletName $MyInvocation.MyCommand -tenantFilter $TenantFilter -data $null
         return
     }
 
@@ -128,17 +130,8 @@ function Get-CIPPAlertUnlicensedOneDriveData {
         }
 
         $StorageUsedGB = $null
-        $StorageBytes = 0.0
-        $ParsedStorage = $false
-        if ($Row.PSObject.Properties.Name -contains 'StorageUsed.') {
-            $ParsedStorage = [double]::TryParse("$($Row.'StorageUsed.')", [ref]$StorageBytes)
-        }
-        if (-not $ParsedStorage -and $Row.StorageUsed) {
-            $UsedRaw = "$($Row.StorageUsed)" -replace '[^\d.]', ''
-            $ParsedStorage = [double]::TryParse($UsedRaw, [ref]$StorageBytes)
-        }
-        if ($ParsedStorage) {
-            $StorageUsedGB = [math]::Round($StorageBytes / 1GB, 2)
+        if ($null -ne $Row.StorageUsed) {
+            $StorageUsedGB = [math]::Round([double]$Row.StorageUsed / 1GB, 2)
         }
 
         $Title = [string]$Row.Title
@@ -170,7 +163,5 @@ function Get-CIPPAlertUnlicensedOneDriveData {
         $Item
     }
 
-    if ($AlertData) {
-        Write-AlertTrace -cmdletName $MyInvocation.MyCommand -tenantFilter $TenantFilter -data $AlertData
-    }
+    Write-AlertTrace -cmdletName $MyInvocation.MyCommand -tenantFilter $TenantFilter -data $AlertData
 }

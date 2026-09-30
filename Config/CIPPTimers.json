@@ -158,15 +158,6 @@
     "RunOnProcessor": true
   },
   {
-    "Id": "80070b4f-95ed-4e5f-be4c-9e339306d4aa",
-    "Command": "Start-BPAOrchestrator",
-    "Description": "Orchestrator to process BPA reports",
-    "Cron": "0 0 3 * * *",
-    "Priority": 10,
-    "TZOffset": true,
-    "RunOnProcessor": true
-  },
-  {
     "Id": "54c39540-fe91-4795-8613-ac4295751a51",
     "Command": "Start-ExtensionOrchestrator",
     "Description": "Orchestrator to process extensions",
@@ -228,6 +219,16 @@
     "IsSystem": true
   },
   {
+    "Id": "9792e664-002b-475e-a1c2-fd5d04b19a3f",
+    "Command": "Start-ReportAttachmentRetentionCleanup",
+    "Description": "Timer to cleanup report attachments uploaded to blob storage based on retention policy",
+    "Cron": "0 30 2 * * *",
+    "Priority": 23,
+    "RunOnProcessor": true,
+    "TZOffset": true,
+    "IsSystem": true
+  },
+  {
     "Id": "5e8a9b4c-2d6f-4a3e-b7c1-9d0e5f3a8b2c",
     "Command": "Start-IntuneReportExportOrchestrator",
     "Description": "Submit Intune report-export jobs ahead of nightly DB cache run",
@@ -284,5 +285,14 @@
     "RunOnProcessor": true,
     "TZOffset": true,
     "PreferredProcessor": "standards"
+  },
+  {
+    "Id": "3f7a1c92-58d4-4e0b-9a13-6c2b8d45e7f1",
+    "Command": "Start-InstanceHealthSample",
+    "Description": "Sample container log health into the InstanceHealth table",
+    "Cron": "0 */5 * * * *",
+    "Priority": 0,
+    "RunOnProcessor": true,
+    "IsSystem": true
   }
 ]
